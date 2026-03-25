@@ -36,3 +36,11 @@ jobs:
         files: dist/OptiScaler_Installer.exe # PyInstaller가 생성한 결과물 경로
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Build with PyInstaller
+        env:
+          OPTISCALER_SHEET_ID: ${{ secrets.OPTISCALER_SHEET_ID }}
+          OPTISCALER_SHEET_GID: ${{ secrets.OPTISCALER_SHEET_GID }}
+          OPTISCALER_DOWNLOAD_LINKS_SHEET_GID: ${{ secrets.OPTISCALER_DOWNLOAD_LINKS_SHEET_GID }}
+        run: |
+          pip install -r requirements.txt
+          python build.py  # build.py 내부에서 os.getenv를 사용해 이 값들을 읽게 됩니다.
