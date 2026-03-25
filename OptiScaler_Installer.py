@@ -1,3 +1,17 @@
+# 게임별 gamename.log logger 생성 함수
+import logging.handlers
+def get_game_logger(game_name: str) -> logging.Logger:
+    """Return a logger that writes to gamename.log in the exe/script directory."""
+    safe_name = re.sub(r'[^\w\-]', '_', game_name)  # 파일명 안전화
+    log_path = Path(sys.executable if getattr(sys, 'frozen', False) else __file__).resolve().parent / f"{safe_name}.log"
+    logger = logging.getLogger(f"game_{safe_name}")
+    if not any(isinstance(h, logging.FileHandler) and getattr(h, 'baseFilename', None) == str(log_path) for h in logger.handlers):
+        fh = logging.FileHandler(log_path, encoding="utf-8")
+        fh.setLevel(logging.INFO)
+        fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s: %(message)s"))
+        logger.addHandler(fh)
+    logger.setLevel(logging.INFO)
+    return logger
 
 import os
 import csv
@@ -89,79 +103,51 @@ ENFORCE_GPU_CHECK = True
 # File logging handler with fallbacks: app folder -> %LOCALAPPDATA% -> temp dir
 def _init_file_logger() -> Optional[Path]:
     candidates = []
-    # Prefer the script/app folder explicitly
-    try:
-        script_dir = Path(__file__).resolve().parent
-        candidates.append(script_dir)
-    except Exception:
-        pass
-    # If running as a frozen exe, _MEIPASS may point to the temp extraction dir;
-    # keep it as a fallback after the script dir.
-    try:
-        meipass = getattr(sys, "_MEIPASS", None)
-        if meipass:
-            candidates.append(Path(meipass))
-    except Exception:
-        pass
-    try:
-        la = os.environ.get("LOCALAPPDATA")
-        if la:
-            candidates.append(Path(la) / "OptiScalerInstaller")
-    except Exception:
-        pass
-    try:
-        candidates.append(Path(tempfile.gettempdir()) / "OptiScalerInstaller")
-    except Exception:
-        pass
-    # As a last resort, try current working directory
-    try:
-        candidates.append(Path.cwd())
-    except Exception:
-        pass
-
-    attempted = []
-    last_exc = None
-    for cand in candidates:
+    # When frozen, the primary target is the directory containing the executable.
+    # This ensures logs are created next to the .exe file.
+    if getattr(sys, 'frozen', False) and hasattr(sys, 'executable'):
         try:
-            attempted.append(str(cand))
-            cand.mkdir(parents=True, exist_ok=True)
-            log_path = cand / "installer.log"
-            # ensure file is writable by opening for append
-            with open(log_path, "a", encoding="utf-8") as f:
-                f.write("")
+            exe_dir = Path(sys.executable).resolve().parent
+            candidates.append(exe_dir)
+        except Exception:
             try:
-                from logging.handlers import RotatingFileHandler
+                # PyInstaller 환경 지원: sys._MEIPASS가 있으면 exe 위치, 아니면 __file__ 기준
+                if hasattr(sys, '_MEIPASS'):
+                    script_dir = Path(sys.executable).resolve().parent
+                else:
+                    script_dir = Path(__file__).resolve().parent
+                script_dir.mkdir(parents=True, exist_ok=True)
+                log_path = script_dir / "installer.log"
+                # ensure file is writable by opening for append
+                with open(log_path, "a", encoding="utf-8") as f:
+                    f.write("")
+                # 중복 핸들러 방지
+                root_logger = logging.getLogger()
+                for h in list(root_logger.handlers):
+                    if isinstance(h, logging.FileHandler) and getattr(h, 'baseFilename', None) == str(log_path):
+                        root_logger.removeHandler(h)
+                try:
+                    from logging.handlers import RotatingFileHandler
+                    fh = RotatingFileHandler(
+                        log_path,
+                        maxBytes=5 * 1024 * 1024,
+                        backupCount=3,
+                        encoding="utf-8"
+                    )
+                except Exception:
+                    fh = logging.FileHandler(log_path, encoding="utf-8")
 
-                fh = RotatingFileHandler(
-                    log_path,
-                    maxBytes=5 * 1024 * 1024,
-                    backupCount=3,
-                    encoding="utf-8",
-                )
-            except Exception:
-                fh = logging.FileHandler(log_path, encoding="utf-8")
-
-            fh.setLevel(logging.INFO)
-            fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s: %(message)s"))
-            logging.getLogger().addHandler(fh)
-            logging.info("File logging initialized at %s", log_path)
-            return log_path
-        except Exception as e:
-            last_exc = e
-            # try next candidate
-            continue
-
-    # If we reach here, file logging couldn't be initialized — print diagnostics
-    try:
-        print("Warning: failed to initialize file logging; attempted these locations:", file=sys.stderr)
-        for p in attempted:
-            print(f" - {p}", file=sys.stderr)
-        if last_exc:
-            print(f"Last error: {last_exc}", file=sys.stderr)
-    except Exception:
-        pass
-    return None
-
+                fh.setLevel(logging.INFO)
+                fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s: %(message)s"))
+                root_logger.addHandler(fh)
+                logging.info("File logging initialized at %s", log_path)
+                return log_path
+            except Exception as e:
+                try:
+                    print(f"Warning: failed to initialize file logging at {locals().get('script_dir', '?')}: {e}", file=sys.stderr)
+                except Exception:
+                    pass
+                return None
 def _configure_logging():
     root = logging.getLogger()
     root.setLevel(logging.INFO)
@@ -584,12 +570,6 @@ def load_module_download_links_from_public_sheet(spreadsheet_id, gid=518993268):
             "gpu_vendor": gpu_vendor,
         }
 
-    # Diagnostic: log loaded module keys for easier troubleshooting
-    try:
-        keys_list = sorted(list(mapping.keys()))
-        logging.info("Download-link module keys: %s", ", ".join(keys_list))
-    except Exception:
-        logging.exception("Failed to log download-link module keys")
 
     return mapping
 
@@ -690,43 +670,57 @@ def install_from_source_folder(source_folder, target_path, dll_name=""):
     _rename_optiscaler_dll(target_path, dll_name)
 
 
-def extract_archive(archive_path, target_path):
+def extract_archive(archive_path, target_path, logger=None):
     """Extract .zip or .7z into target_path, preserving folder structure."""
     ext = os.path.splitext(archive_path)[1].lower()
+    try:
+        # 1. Prefer Python's built-in zipfile for .zip (Safest for Korean/Unicode paths)
+        if ext == ".zip":
+            try:
+                with zipfile.ZipFile(archive_path, "r") as z:
+                    z.extractall(target_path)
+                if logger:
+                    logger.info(f"Extracted .zip archive {archive_path} to {target_path}")
+                return
+            except Exception as e:
+                if logger:
+                    logger.warning(f"Python zipfile extraction failed, trying tar fallback: {e}")
+                else:
+                    logging.warning("Python zipfile extraction failed, trying tar fallback: %s", e)
 
-    # 1. Prefer Python's built-in zipfile for .zip (Safest for Korean/Unicode paths)
-    if ext == ".zip":
-        try:
-            with zipfile.ZipFile(archive_path, "r") as z:
-                z.extractall(target_path)
-            return
-        except Exception as e:
-            logging.warning("Python zipfile extraction failed, trying tar fallback: %s", e)
+        tar_exe = shutil.which("tar")
+        if tar_exe:
+            try:
+                subprocess.run(
+                    [tar_exe, "-xf", archive_path, "-C", target_path],
+                    check=True,
+                    **_subprocess_no_window_kwargs(),
+                )
+                if logger:
+                    logger.info(f"Extracted archive {archive_path} to {target_path} using tar.exe")
+                return
+            except subprocess.CalledProcessError as e:
+                if logger:
+                    logger.warning(f"tar.exe extraction failed ({archive_path}), falling back: {e}")
+                else:
+                    logging.warning("tar.exe extraction failed (%s), falling back: %s", archive_path, e)
 
-    tar_exe = shutil.which("tar")
-    if tar_exe:
-        try:
-            subprocess.run(
-                [tar_exe, "-xf", archive_path, "-C", target_path],
-                check=True,
-                **_subprocess_no_window_kwargs(),
+        # If zipfile failed above (and tar also failed or wasn't found), try zipfile one last time
+        # strictly to raise the error if it was the only option.
+        if ext == ".zip":
+            raise RuntimeError(f"Failed to extract .zip file: {archive_path}")
+
+        if ext == ".7z":
+            raise RuntimeError(
+                "Cannot extract .7z archive: no suitable extractor found. "
+                "On Windows 11, ensure 'tar.exe' is available (built-in)."
             )
-            return
-        except subprocess.CalledProcessError as e:
-            logging.warning("tar.exe extraction failed (%s), falling back: %s", archive_path, e)
 
-    # If zipfile failed above (and tar also failed or wasn't found), try zipfile one last time
-    # strictly to raise the error if it was the only option.
-    if ext == ".zip":
-        raise RuntimeError(f"Failed to extract .zip file: {archive_path}")
-
-    if ext == ".7z":
-        raise RuntimeError(
-            "Cannot extract .7z archive: no suitable extractor found. "
-            "On Windows 11, ensure 'tar.exe' is available (built-in)."
-        )
-
-    raise ValueError(f"Unsupported archive format: {ext}")
+        raise ValueError(f"Unsupported archive format: {ext}")
+    except Exception as e:
+        if logger:
+            logger.error(f"Failed to extract archive {archive_path} to {target_path}: {e}")
+        raise
 
 
 def _rename_optiscaler_dll(target_path, dll_name):
@@ -916,16 +910,23 @@ def apply_ini_settings(ini_path, settings, force_frame_generation=False):
                 logging.exception("Failed to write frame generation enforcement in INI")
 
 
-def download_to_file(url, dest_path, timeout=60):
+def download_to_file(url, dest_path, timeout=60, logger=None):
     """Download a file with streaming writes to avoid high memory usage."""
-    response = _file_session.get(url, timeout=timeout, stream=True)
-    response.raise_for_status()
-    p = Path(dest_path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    with p.open("wb") as f:
-        for chunk in response.iter_content(chunk_size=1024 * 256):
-            if chunk:
-                f.write(chunk)
+    try:
+        response = _file_session.get(url, timeout=timeout, stream=True)
+        response.raise_for_status()
+        p = Path(dest_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with p.open("wb") as f:
+            for chunk in response.iter_content(chunk_size=1024 * 256):
+                if chunk:
+                    f.write(chunk)
+        if logger:
+            logger.info(f"Downloaded file from {url} to {dest_path}")
+    except Exception as e:
+        if logger:
+            logger.error(f"Failed to download {url} to {dest_path}: {e}")
+        raise
 
 
 def _parse_version_text_to_ini_entries(version_text: str):
@@ -988,7 +989,8 @@ def _set_file_readonly(path: Path):
         logging.exception("Failed to set %s readonly", path)
 
 
-def _get_engine_ini_path(raw_path: Optional[str], workspace_root: Optional[str] = None) -> Optional[Path]:
+
+def _get_engine_ini_path(raw_path: Optional[str], workspace_root: Optional[str] = None, logger=None) -> Optional[Path]:
     """Resolve and prepare a Path for an Engine.ini file.
 
     This will expand env vars and user home, resolve relative paths against
@@ -1008,12 +1010,18 @@ def _get_engine_ini_path(raw_path: Optional[str], workspace_root: Optional[str] 
     try:
         raw = os.path.expandvars(raw)
     except Exception:
-        logging.exception("Failed to expand env vars in engine.ini path: %s", raw)
+        if logger:
+            logger.exception(f"Failed to expand env vars in engine.ini path: {raw}")
+        else:
+            logging.exception("Failed to expand env vars in engine.ini path: %s", raw)
 
     try:
         raw = os.path.expanduser(raw)
     except Exception:
-        logging.exception("Failed to expand user in engine.ini path: %s", raw)
+        if logger:
+            logger.exception(f"Failed to expand user in engine.ini path: {raw}")
+        else:
+            logging.exception("Failed to expand user in engine.ini path: %s", raw)
 
     p = Path(raw)
     if not p.is_absolute():
@@ -1036,11 +1044,23 @@ def _get_engine_ini_path(raw_path: Optional[str], workspace_root: Optional[str] 
         parent.mkdir(parents=True, exist_ok=True)
         return target
     except PermissionError as e:
-        logging.error("Permission denied creating %s (requested %s): %s", parent, raw_path, e)
+        msg = f"Permission denied creating {parent} (requested {raw_path}): {e}"
+        if logger:
+            logger.error(msg)
+        else:
+            logging.error("Permission denied creating %s (requested %s): %s", parent, raw_path, e)
     except OSError as e:
-        logging.error("OS error creating %s (requested %s): %s", parent, raw_path, e)
-    except Exception:
-        logging.exception("Unexpected error creating %s for %s", parent, raw_path)
+        msg = f"OS error creating {parent} (requested {raw_path}): {e}"
+        if logger:
+            logger.error(msg)
+        else:
+            logging.error("OS error creating %s (requested %s): %s", parent, raw_path, e)
+    except Exception as exc:
+        msg = f"Unexpected error creating {parent} for {raw_path}: {exc}"
+        if logger:
+            logger.exception(msg)
+        else:
+            logging.exception("Unexpected error creating %s for %s", parent, raw_path)
 
     # Fallback: %LOCALAPPDATA%/OptiScalerInstaller
     try:
@@ -1048,10 +1068,16 @@ def _get_engine_ini_path(raw_path: Optional[str], workspace_root: Optional[str] 
         if la:
             fallback = Path(la) / "OptiScalerInstaller" / target.name
             fallback.parent.mkdir(parents=True, exist_ok=True)
-            logging.info("Falling back to LOCALAPPDATA for engine.ini: %s", fallback)
+            if logger:
+                logger.info(f"Falling back to LOCALAPPDATA for engine.ini: {fallback}")
+            else:
+                logging.info("Falling back to LOCALAPPDATA for engine.ini: %s", fallback)
             return fallback
-    except Exception:
-        logging.exception("Failed to fall back to LOCALAPPDATA for engine.ini")
+    except Exception as exc:
+        if logger:
+            logger.exception(f"Failed to fall back to LOCALAPPDATA for engine.ini: {exc}")
+        else:
+            logging.exception("Failed to fall back to LOCALAPPDATA for engine.ini")
 
     # Final fallback: temp directory
     try:
@@ -1383,38 +1409,42 @@ def process_engine_ini_edits(spreadsheet_id: str, gid: int = 0, workspace_root: 
 
 
 
-def install_optipatcher(target_path, url=OPTIPATCHER_URL):
+def install_optipatcher(target_path, url=OPTIPATCHER_URL, logger=None):
     plugins_dir = os.path.join(target_path, "plugins")
     os.makedirs(plugins_dir, exist_ok=True)
 
     asi_path = os.path.join(plugins_dir, "OptiPatcher.asi")
-    download_to_file(url, asi_path, timeout=30)
+    download_to_file(url, asi_path, timeout=30, logger=logger)
+    if logger:
+        logger.info(f"OptiPatcher downloaded to {asi_path}")
 
-    logging.info("OptiPatcher downloaded to %s", asi_path)
 
-
-def install_unreal5_from_url(url, target_path):
+def install_unreal5_from_url(url, target_path, logger=None):
     parsed = urlparse(url)
     file_name = os.path.basename(parsed.path)
     ext = os.path.splitext(file_name)[1].lower()
     if ext not in {".zip", ".7z"}:
-        raise ValueError(f"Unreal5 URL must point to .zip or .7z archive: {url}")
+        msg = f"Unreal5 URL must point to .zip or .7z archive: {url}"
+        if logger:
+            logger.error(msg)
+        raise ValueError(msg)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         archive_path = str(Path(tmpdir) / (file_name or f"unreal5_patch{ext}"))
-        download_to_file(url, archive_path, timeout=60)
-        extract_archive(archive_path, target_path)
-        logging.info("Unreal5 patch installed from URL: %s", url)
+        download_to_file(url, archive_path, timeout=60, logger=logger)
+        extract_archive(archive_path, target_path, logger=logger)
+        if logger:
+            logger.info(f"Unreal5 patch installed from URL: {url}")
 
 
-def install_reframework_dinput8_from_url(url, target_path):
+def install_reframework_dinput8_from_url(url, target_path, logger=None):
     """Download REFramework zip and install only dinput8.dll into target_path."""
     parsed = urlparse(url)
     file_name = os.path.basename(parsed.path) or "reframework.zip"
 
     with tempfile.TemporaryDirectory() as tmpdir:
         archive_path = str(Path(tmpdir) / file_name)
-        download_to_file(url, archive_path, timeout=60)
+        download_to_file(url, archive_path, timeout=60, logger=logger)
 
         with zipfile.ZipFile(archive_path, "r") as z:
             dll_member = next(
@@ -1426,13 +1456,16 @@ def install_reframework_dinput8_from_url(url, target_path):
             )
 
             if not dll_member:
-                raise FileNotFoundError("dinput8.dll not found inside reframework zip")
+                msg = "dinput8.dll not found inside reframework zip"
+                if logger:
+                    logger.error(msg)
+                raise FileNotFoundError(msg)
 
             dst = os.path.join(target_path, "dinput8.dll")
             with z.open(dll_member, "r") as src_fp, open(dst, "wb") as dst_fp:
                 shutil.copyfileobj(src_fp, dst_fp)
-
-        logging.info("REFramework dinput8.dll installed from URL: %s", url)
+        if logger:
+            logger.info(f"REFramework dinput8.dll installed from URL: {url}")
 
 
 # ---------------------------------------------------------------------------
@@ -1698,43 +1731,69 @@ class OptiManagerApp:
         popup.after(80, lambda p=popup: self._center_popup_on_root(p))
 
     def _get_rtss_install_path(self) -> Path:
-        try:
-            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Unwinder\RTSS") as key:
-                val, _ = winreg.QueryValueEx(key, "InstallPath")
-                if val:
-                    return Path(val)
-        except Exception:
-            pass
+        roots = [winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER]
+        subkeys = [r"SOFTWARE\WOW6432Node\Unwinder\RTSS", r"SOFTWARE\Unwinder\RTSS"]
+
+        for root in roots:
+            for subkey in subkeys:
+                try:
+                    with winreg.OpenKey(root, subkey, 0, winreg.KEY_READ) as key:
+                        val, _ = winreg.QueryValueEx(key, "InstallPath")
+                        if val:
+                            p = Path(val)
+                            # If the registry value points to RTSS.exe, use its parent folder
+                            if p.is_file() and p.name.lower() == "rtss.exe":
+                                p = p.parent
+                            if p.exists():
+                                return p
+                except Exception:
+                    continue
         return Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "RivaTuner Statistics Server"
 
-    def _check_and_show_rtss_popup(self):
+    def _check_and_show_rtss_popup(self, logger=None):
         """RTSS 설정 검사 및 조건 불만족 시 팝업 표시"""
 
         try:
-            profiles_dir = self._get_rtss_install_path() / "Profiles"
+            install_path = self._get_rtss_install_path()
+            profiles_dir = install_path / "Profiles"
             global_path = profiles_dir / "Global"
-            ref_val, detours_val = None, None
             # RTSS 폴더 또는 Global 파일이 없으면 팝업 띄우지 않음
             if not (profiles_dir.exists() and global_path.exists()):
+                if logger:
+                    logger.info(f"RTSS not installed or Global file missing at {global_path}")
                 return
-            lines = global_path.read_text(encoding="utf-8", errors="ignore").splitlines()
+            lines = global_path.read_text(encoding="utf-8-sig", errors="ignore").splitlines()
+            ref_val, detours_val = None, None
             for line in lines:
-                if line.strip().startswith("ReflexSetLatencyMarker="):
-                    ref_val = line.split("=", 1)[1].strip()
-                if line.strip().startswith("UseDetours="):
-                    detours_val = line.split("=", 1)[1].strip()
+                line = line.strip()
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    if k.strip() == "ReflexSetLatencyMarker":
+                        ref_val = v.strip()
+                    elif k.strip() == "UseDetours":
+                        detours_val = v.strip()
+            if logger:
+                logger.info(f"RTSS Global: UseDetours={detours_val}, ReflexSetLatencyMarker={ref_val}")
             # 둘 다 조건 만족 시(정상): 팝업 띄우지 않음
             if ref_val == "0" and detours_val == "1":
+                if logger:
+                    logger.info("RTSS settings OK: UseDetours=1, ReflexSetLatencyMarker=0")
                 return
-            # 구글시트에서 RTSS_kr/en 문구 가져오기
+            # RTSS_kr/en 문구 가져오기
             key = "rtss_kr" if USE_KOREAN else "rtss_en"
             val = self.module_download_links.get(key, None)
             msg = str(val or "").strip()
             if not msg:
-                return  # 문구 없으면 아무 알림도 띄우지 않음
+                if USE_KOREAN:
+                    msg = "RTSS 설정 확인이 필요합니다.\n\n[Global]\nUseDetours=1\nReflexSetLatencyMarker=0\n\n위 설정이 적용되어 있는지 확인해주세요."
+                else:
+                    msg = "RTSS Configuration Check:\n\nPlease ensure the following settings in your Global profile:\nUseDetours=1\nReflexSetLatencyMarker=0"
             self._show_rtss_popup(msg)
         except Exception as e:
-            logging.warning(f"Error during RTSS popup check: {e}")
+            if logger:
+                logger.warning(f"Error during RTSS popup check: {e}")
+            else:
+                logging.warning(f"Error during RTSS popup check: {e}")
 
     def _show_rtss_popup(self, message_text: str):
         """RTSS 안내 팝업 (텍스트+이미지)"""
@@ -1749,8 +1808,14 @@ class OptiManagerApp:
         container = ctk.CTkFrame(popup, fg_color="transparent")
         container.pack(fill="both", expand=True, padx=22, pady=(18, 12))
 
-        # 텍스트
-        text_widget = tk.Text(
+        # 텍스트 표시 (message_text를 실제로 사용)
+        text = message_text or "(No message)"
+
+
+        # --- Create and fill message_widget before using it ---
+        pattern = re.compile(r"\[\s*RED\s*\](.*?)\[\s*END\s*\]", re.IGNORECASE | re.DOTALL)
+        last = 0
+        message_widget = tk.Text(
             container,
             wrap="word",
             relief="flat",
@@ -1761,35 +1826,46 @@ class OptiManagerApp:
             width=58,
         )
         normal_font = tkfont.Font(family=FONT_UI, size=13)
-        text_widget.configure(font=normal_font)
-        text_widget.insert("end", message_text)
-        line_count = max(1, min(16, message_text.count("\n") + 1))
-        text_widget.configure(height=line_count)
-        text_widget.configure(state="disabled")
-        text_widget.pack(anchor="w", fill="x")
+        red_font = tkfont.Font(family=FONT_UI, size=14, weight="bold")
+        message_widget.configure(font=normal_font)
+        message_widget.tag_configure("warning_red", foreground="#FF4D4F", font=red_font)
 
-        # 이미지 (assets/RTSS.webp)
+        full_plain_text = ""
+        for m in pattern.finditer(text):
+            if m.start() > last:
+                normal = text[last:m.start()]
+                message_widget.insert("end", normal)
+                full_plain_text += normal
+            red_text = m.group(1)
+            if red_text:
+                message_widget.insert("end", red_text, ("warning_red",))
+                full_plain_text += red_text
+            last = m.end()
+        if last < len(text):
+            tail = text[last:]
+            message_widget.insert("end", tail)
+            full_plain_text += tail
+
+        line_count = max(1, min(16, full_plain_text.count("\n") + 1))
+        message_widget.configure(height=line_count)
+        message_widget.configure(state="disabled")
+        message_widget.pack(anchor="w", fill="x")
+
+        # --- Now show RTSS.webp image below the text ---
         try:
-            img_path = ASSETS_DIR / "RTSS.webp"
+            img_path = Path(__file__).resolve().parent / "assets" / "RTSS.webp"
             if img_path.exists():
                 pil_img = Image.open(img_path)
-                # hi-dpi 적용 (2배), 사이즈 50% 확대
                 orig_w, orig_h = pil_img.size
-                base_w = 180
-                scale = 1.8  # 80% 확대 (20% 추가)
-                target_w = int(base_w * scale * HI_DPI_SCALE)
-                target_h = int(orig_h * (target_w / orig_w))
-
-                # 커버 이미지 처리 로직 재사용
-                pil_img = _prepare_cover_image(pil_img, target_w, target_h)
-
-                # CTkImage에 hi-dpi 적용
-                ctk_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(target_w // HI_DPI_SCALE, target_h // HI_DPI_SCALE))
-                img_label = ctk.CTkLabel(container, image=ctk_img, text="")
-                img_label.image = ctk_img  # keep ref
+                new_w = int(orig_w * 0.75)
+                new_h = int(orig_h * 0.75)
+                ctk_image = ctk.CTkImage(light_image=pil_img, size=(new_w, new_h))
+                img_label = ctk.CTkLabel(container, image=ctk_image, text="")
+                img_label.image = ctk_image  # Prevent garbage collection
                 img_label.pack(pady=(12, 0))
-        except Exception as e:
-            logging.warning(f"Failed to load RTSS image: {e}")
+        except Exception:
+            pass
+
 
         def _close_popup():
             try:
@@ -1877,7 +1953,7 @@ class OptiManagerApp:
         try:
             db = load_game_db_from_public_sheet(SHEET_ID, SHEET_GID)
             if not db:
-                raise ValueError("Google Sheet has no data.")
+                raise ValueError("Sheet has no data.")
 
             module_links = {}
             try:
@@ -1898,16 +1974,11 @@ class OptiManagerApp:
         self._refresh_optiscaler_download_link_ui()
         self.apply_btn.configure(state="normal")
         self._update_sheet_status()
+        # --- 최신 버전 확인 및 업그레이드 유도 ---
+        self.check_app_update()
+
+        # --- 게임 자동 스캔 트리거 ---
         if ok:
-            logging.info("GAME_DB loaded from Google Sheets (%d entries)", len(self.game_db))
-            logging.info("Download-link sheet loaded (%d modules)", len(self.module_download_links))
-            # Diagnostic: how many rows provide engine.ini_location
-            try:
-                engine_rows = sum(1 for v in (self.game_db.values() or []) if str(v.get("engine_ini_location", "")).strip())
-                logging.info("Entries with engine.ini_location: %d", engine_rows)
-            except Exception:
-                logging.exception("Failed to count engine.ini_location entries")
-            self._check_and_show_rtss_popup()
             warning_key = "__warning_kr__" if USE_KOREAN else "__warning_en__"
             warning_text = str(self.module_download_links.get(warning_key, "")).strip()
             if not self._supported_games_popup_shown:
@@ -1920,8 +1991,32 @@ class OptiManagerApp:
                 else:
                     self._show_supported_games_popup()
             self._start_auto_scan()
-        else:
-            logging.error("Failed to load Google Sheet: %s", err)
+
+    def check_app_update(self):
+        """Check for app update using loaded module_download_links. Runs on UI thread after sheet load."""
+        try:
+            latest_info = None
+            for k, v in (self.module_download_links or {}).items():
+                if k == "latest_installer_version" and isinstance(v, dict):
+                    latest_info = v
+                    break
+            if latest_info:
+                def parse_version(verstr):
+                    return tuple(int(x) for x in str(verstr).strip().split(".") if x.isdigit())
+                app_ver = parse_version(APP_VERSION)
+                sheet_ver = parse_version(latest_info.get("version", ""))
+                if sheet_ver and app_ver and app_ver < sheet_ver:
+                    upgrade_url = latest_info.get("url") or latest_info.get("link")
+                    if upgrade_url:
+                        webbrowser.open_new(upgrade_url)
+        except Exception as e:
+            logging.warning(f"Version check failed: {e}")
+
+        # 시트 로드 성공 여부와 무관하게 RTSS 설정 체크 진행 (기본 메시지 Fallback)
+        logger = None
+        if getattr(self, "found_exe_list", None) and self.selected_game_index is not None:
+            logger = get_game_logger(self.found_exe_list[self.selected_game_index].get("game_name", "unknown"))
+        self._check_and_show_rtss_popup(logger=logger)
 
     def _show_startup_warning_popup(self, warning_text: str, on_close=None):
         text = str(warning_text or "").strip()
@@ -1941,27 +2036,9 @@ class OptiManagerApp:
         container = ctk.CTkFrame(popup, fg_color="transparent")
         container.pack(fill="both", expand=True, padx=22, pady=(18, 12))
 
-        red_pattern = re.compile(r"\[\s*RED\s*\](.*?)\[\s*END\s*\]", re.IGNORECASE | re.DOTALL)
-        segments = []
-        cursor = 0
-        for m in red_pattern.finditer(text):
-            if m.start() > cursor:
-                normal_part = text[cursor:m.start()]
-                if normal_part:
-                    segments.append((normal_part, False))
-            red_part = m.group(1)
-            if red_part:
-                segments.append((red_part, True))
-            cursor = m.end()
-
-        if cursor < len(text):
-            tail = text[cursor:]
-            if tail:
-                segments.append((tail, False))
-
-        if not segments:
-            segments = [(re.sub(r"\[\s*/?\s*(RED|END)\s*\]", "", text, flags=re.IGNORECASE), False)]
-
+        # Parse [RED]... [END] and color only the text between
+        pattern = re.compile(r"\[\s*RED\s*\](.*?)\[\s*END\s*\]", re.IGNORECASE | re.DOTALL)
+        last = 0
         message_text = tk.Text(
             container,
             wrap="word",
@@ -1978,15 +2055,20 @@ class OptiManagerApp:
         message_text.tag_configure("warning_red", foreground="#FF4D4F", font=red_font)
 
         full_plain_text = ""
-        for seg_text, is_red in segments:
-            cleaned = re.sub(r"\[\s*/?\s*(RED|END)\s*\]", "", seg_text, flags=re.IGNORECASE)
-            if not cleaned:
-                continue
-            full_plain_text += cleaned
-            if is_red:
-                message_text.insert("end", cleaned, ("warning_red",))
-            else:
-                message_text.insert("end", cleaned)
+        for m in pattern.finditer(text):
+            if m.start() > last:
+                normal = text[last:m.start()]
+                message_text.insert("end", normal)
+                full_plain_text += normal
+            red_text = m.group(1)
+            if red_text:
+                message_text.insert("end", red_text, ("warning_red",))
+                full_plain_text += red_text
+            last = m.end()
+        if last < len(text):
+            tail = text[last:]
+            message_text.insert("end", tail)
+            full_plain_text += tail
 
         line_count = max(1, min(16, full_plain_text.count("\n") + 1))
         message_text.configure(height=line_count)
@@ -3411,6 +3493,7 @@ class OptiManagerApp:
                                 "module_dl": entry.get("module_dl", ""),
                                 "optipatcher": entry.get("optipatcher", False),
                                 "unreal5_url": entry.get("unreal5_url", ""),
+                                "unreal5": entry.get("unreal5", False),
                                 "reframework_url": entry.get("reframework_url", ""),
                                 "information": _kr_info or entry.get("information", ""),
                                 "cover_url": entry.get("cover_url", ""),
@@ -3566,6 +3649,7 @@ class OptiManagerApp:
 
     def _apply_optiscaler_worker(self, game_data, source_archive):
         target_path = game_data["path"]
+        logger = get_game_logger(game_data.get("game_name", "unknown"))
         try:
             with tempfile.TemporaryDirectory() as tmpdir:
                 extract_archive(source_archive, tmpdir)
@@ -3575,6 +3659,7 @@ class OptiManagerApp:
                 else:
                     actual_source = tmpdir
                 install_from_source_folder(actual_source, target_path, dll_name=game_data.get("dll_name", ""))
+                logger.info(f"Extracted and installed files to {target_path}")
 
             module_key = str(game_data.get("module_dl", "")).strip().lower()
 
@@ -3585,9 +3670,11 @@ class OptiManagerApp:
 
             if game_data.get("unreal5") and unreal_url:
                 install_unreal5_from_url(unreal_url, target_path)
+                logger.info(f"Installed Unreal5 patch from {unreal_url} to {target_path}")
 
             if game_data.get("reframework_url"):
                 install_reframework_dinput8_from_url(game_data["reframework_url"], target_path)
+                logger.info(f"Installed REFramework dinput8.dll from {game_data['reframework_url']} to {target_path}")
 
             ini_path = os.path.join(target_path, "OptiScaler.ini")
             if not os.path.exists(ini_path):
@@ -3602,8 +3689,10 @@ class OptiManagerApp:
                     opti_url = opti_link_entry.get("url", OPTIPATCHER_URL)
                 install_optipatcher(target_path, url=opti_url)
                 merged_ini_settings["LoadAsiPlugins"] = "True"
+                logger.info(f"Installed OptiPatcher from {opti_url} to {target_path}")
 
             apply_ini_settings(ini_path, merged_ini_settings, force_frame_generation=True)
+            logger.info(f"Applied ini settings to {ini_path}")
 
             # Optional in-game ini patching from sheet columns:
             # - only when #ingame_ini is provided
@@ -3616,15 +3705,15 @@ class OptiManagerApp:
                 if os.path.exists(ingame_ini_path):
                     _ensure_file_writable(Path(ingame_ini_path))
                     apply_ini_settings(ingame_ini_path, ingame_settings, force_frame_generation=False)
-                    logging.info("Applied in-game settings to %s", ingame_ini_path)
+                    logger.info(f"Applied in-game settings to {ingame_ini_path}")
                 else:
-                    logging.info("In-game ini not found, skipped: %s", ingame_ini_path)
+                    logger.info(f"In-game ini not found, skipped: {ingame_ini_path}")
 
             # engine.ini_location 폴더에 Engine.ini가 없으면 생성, engine.ini_type 셀의 값을 파싱해서 섹션/키별로 반영
             try:
                 engine_loc = str(game_data.get("engine_ini_location", "")).strip()
                 engine_ini_content = str(game_data.get("engine_ini_type", "")).strip()
-                logging.info("engine.ini info for install: target=%s, engine_ini_location='%s'", target_path, engine_loc)
+                logger.info(f"engine.ini info for install: target={target_path}, engine_ini_location='{engine_loc}'")
                 
                 if engine_loc and engine_ini_content:
                     ini_path = _find_or_create_engine_ini(engine_loc, workspace_root=target_path)
@@ -3636,7 +3725,7 @@ class OptiManagerApp:
                             
                             if section_map:
                                 _upsert_ini_entries(ini_path, section_map)
-                                logging.info("Upserted engine.ini entries to %s", ini_path)
+                                logger.info(f"Upserted engine.ini entries to {ini_path}")
                         finally:
                             _set_file_readonly(ini_path)
             except Exception:
