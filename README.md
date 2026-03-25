@@ -17,7 +17,6 @@
    - The list of supported games will appear when the installer launches.
 
 
-<img width="640" alt="Image" src="https://github.com/user-attachments/assets/17c657b8-c1ca-49db-bcc4-00ac278d9a3b" />
 
 **References**
  - OptiScaler : https://github.com/optiscaler/OptiScaler
