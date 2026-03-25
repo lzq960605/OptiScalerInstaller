@@ -11,3 +11,7 @@ dist/
 temp_version.txt
 # VS Code settings
 .vscode/
+# Log files
+*.log
+OptiScaler_Installer.log
+installer.log
