@@ -5,7 +5,7 @@
 
 - Internet connection needed (App needs to load game DB from Google Sheet)
 - Optiscaler_0.9.0-pre11 (20260311)_RC4.5.7z or later version
-  > **Github version not supported**
+  > **Github version(v0.7.9) not supported (No XeFG, No XeMFG)**
   > **Please download the latest from OptiScaler discord**
 
 ## Supported GPU
