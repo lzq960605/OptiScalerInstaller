@@ -1,6 +1,7 @@
 # Local configuration and scripts
 build.py
 .env
+.vscode/
 
 # Python & PyInstaller artifacts
 __pycache__/
@@ -9,9 +10,4 @@ dist/
 *.spec
 *.pyc
 temp_version.txt
-# VS Code settings
-.vscode/
-# Log files
 *.log
-OptiScaler_Installer.log
-installer.log
