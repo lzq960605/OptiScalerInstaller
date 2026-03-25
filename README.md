@@ -54,7 +54,7 @@
 &nbsp;
 
 **All credit goes to OptiScaler Team for their hard work.**
-   > nitec, TheRazorMD, Fakemichau, Keu, By-U, Atsy, san9, Cryio
+   > nitec, TheRazerMD, Fakemichau, Keu, By-U, Atsy, san9, Cryio
 
 &nbsp;
 
