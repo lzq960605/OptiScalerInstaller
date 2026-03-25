@@ -26,9 +26,9 @@
 
 &nbsp;
 
-## ✨ Key Features (Live Updated)
+## ✨ Key Features
 ---
-<p>✅ <b>Cloud-Sync Logic:</b> No App update required. All configurations are loaded live from DB.</p>
+<p>✅ <b>Cloud-Sync Logic:</b> All configurations are loaded live from DB.</p>
 
 <p>🔍 <b>Auto Game Scan:</b> Automatically detects Steam library folders.</p>
 
