@@ -1,17 +1,3 @@
-# 게임별 gamename.log logger 생성 함수
-import logging.handlers
-def get_game_logger(game_name: str) -> logging.Logger:
-    """Return a logger that writes to gamename.log in the exe/script directory."""
-    safe_name = re.sub(r'[^\w\-]', '_', game_name)  # 파일명 안전화
-    log_path = Path(sys.executable if getattr(sys, 'frozen', False) else __file__).resolve().parent / f"{safe_name}.log"
-    logger = logging.getLogger(f"game_{safe_name}")
-    if not any(isinstance(h, logging.FileHandler) and getattr(h, 'baseFilename', None) == str(log_path) for h in logger.handlers):
-        fh = logging.FileHandler(log_path, encoding="utf-8")
-        fh.setLevel(logging.INFO)
-        fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s: %(message)s"))
-        logger.addHandler(fh)
-    logger.setLevel(logging.INFO)
-    return logger
 
 import os
 import csv
@@ -68,12 +54,12 @@ except ModuleNotFoundError as e:
         f"Install with: \"{sys.executable}\" -m pip install python-dotenv"
     ) from e
 
-# Application Version
+ # Application Version
 APP_VERSION = "0.1.0"
 
-# Configure logging deterministically below (avoid calling basicConfig early)
+ # Configure logging deterministically below (avoid calling basicConfig early)
 
-# Load .env file (supports both local development and PyInstaller bundle via _MEIPASS)
+ # Load .env file (supports both local development and PyInstaller bundle via _MEIPASS)
 if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
     # Running as PyInstaller bundle
     _env_path = os.path.join(sys._MEIPASS, '.env')
@@ -84,7 +70,7 @@ else:
 if os.path.exists(_env_path):
     load_dotenv(_env_path)
 
-# Allow overriding these values via environment variables for easier testing/config
+ # Allow overriding these values via environment variables for easier testing/config
 SHEET_ID = os.environ.get("OPTISCALER_SHEET_ID", "")
 SHEET_GID = int(os.environ.get("OPTISCALER_SHEET_GID", "0"))
 DOWNLOAD_LINKS_SHEET_GID = int(os.environ.get("OPTISCALER_DOWNLOAD_LINKS_SHEET_GID", "0"))
@@ -100,6 +86,20 @@ OPTIPATCHER_URL = os.environ.get(
 # Enable GPU validation
 ENFORCE_GPU_CHECK = True
 
+import logging.handlers
+def get_game_logger(game_name: str) -> logging.Logger:
+    """Return a logger that writes to gamename.log in the exe/script directory."""
+    safe_name = re.sub(r'[^\w\-]', '_', game_name)
+    log_path = Path(sys.executable if getattr(sys, 'frozen', False) else __file__).resolve().parent / f"{safe_name}.log"
+    logger = logging.getLogger(f"game_{safe_name}")
+    if not any(isinstance(h, logging.FileHandler) and getattr(h, 'baseFilename', None) == str(log_path) for h in logger.handlers):
+        fh = logging.FileHandler(log_path, encoding="utf-8")
+        fh.setLevel(logging.INFO)
+        fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s: %(message)s"))
+        logger.addHandler(fh)
+    logger.setLevel(logging.INFO)
+    return logger
+
 # File logging handler with fallbacks: app folder -> %LOCALAPPDATA% -> temp dir
 def _init_file_logger() -> Optional[Path]:
     candidates = []
@@ -111,7 +111,7 @@ def _init_file_logger() -> Optional[Path]:
             candidates.append(exe_dir)
         except Exception:
             try:
-                # PyInstaller 환경 지원: sys._MEIPASS가 있으면 exe 위치, 아니면 __file__ 기준
+
                 if hasattr(sys, '_MEIPASS'):
                     script_dir = Path(sys.executable).resolve().parent
                 else:
@@ -121,7 +121,7 @@ def _init_file_logger() -> Optional[Path]:
                 # ensure file is writable by opening for append
                 with open(log_path, "a", encoding="utf-8") as f:
                     f.write("")
-                # 중복 핸들러 방지
+
                 root_logger = logging.getLogger()
                 for h in list(root_logger.handlers):
                     if isinstance(h, logging.FileHandler) and getattr(h, 'baseFilename', None) == str(log_path):
@@ -404,9 +404,9 @@ def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
         if optipatcher_index is not None and len(row) > optipatcher_index:
             optipatcher_enabled = _is_true_value(row[optipatcher_index])
         if unreal5_index is not None and len(row) > unreal5_index:
-            # Unreal5 컬럼이 true/false(혹은 1/0, yes/no 등)로 들어올 수 있으므로 값 파싱
+
             val = row[unreal5_index].strip().lower()
-            if val in ("true", "1", "yes", "y", "on"):  # Unreal5가 boolean으로 true인 경우
+            if val in ("true", "1", "yes", "y", "on"): 
                 unreal5_flag = True
             unreal5_url = _normalize_optional_url(row[unreal5_index]) if "," not in val and (val.startswith("http") or val.endswith(('.zip', '.7z'))) else ""
         if reframework_index is not None and len(row) > reframework_index:
@@ -526,7 +526,7 @@ def load_module_download_links_from_public_sheet(spreadsheet_id, gid=518993268):
                 mapping[f"__{module_key}__"] = warning_text
             continue
 
-        # RTSS 팝업용 row도 디버깅
+
         if module_key in {"rtss_kr", "rtss_en"}:
             rtss_text = ""
             if version_idx is not None and len(row) > version_idx:
@@ -1751,13 +1751,13 @@ class OptiManagerApp:
         return Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / "RivaTuner Statistics Server"
 
     def _check_and_show_rtss_popup(self, logger=None):
-        """RTSS 설정 검사 및 조건 불만족 시 팝업 표시"""
 
         try:
             install_path = self._get_rtss_install_path()
             profiles_dir = install_path / "Profiles"
             global_path = profiles_dir / "Global"
-            # RTSS 폴더 또는 Global 파일이 없으면 팝업 띄우지 않음
+
+            # Do not show the popup if the RTSS folder or Global file does not exist
             if not (profiles_dir.exists() and global_path.exists()):
                 if logger:
                     logger.info(f"RTSS not installed or Global file missing at {global_path}")
@@ -1774,12 +1774,12 @@ class OptiManagerApp:
                         detours_val = v.strip()
             if logger:
                 logger.info(f"RTSS Global: UseDetours={detours_val}, ReflexSetLatencyMarker={ref_val}")
-            # 둘 다 조건 만족 시(정상): 팝업 띄우지 않음
+
             if ref_val == "0" and detours_val == "1":
                 if logger:
                     logger.info("RTSS settings OK: UseDetours=1, ReflexSetLatencyMarker=0")
                 return
-            # RTSS_kr/en 문구 가져오기
+
             key = "rtss_kr" if USE_KOREAN else "rtss_en"
             val = self.module_download_links.get(key, None)
             msg = str(val or "").strip()
@@ -1796,7 +1796,7 @@ class OptiManagerApp:
                 logging.warning(f"Error during RTSS popup check: {e}")
 
     def _show_rtss_popup(self, message_text: str):
-        """RTSS 안내 팝업 (텍스트+이미지)"""
+
         popup = ctk.CTkToplevel(self.root)
         popup.title("RTSS Notice")
         popup.transient(self.root)
@@ -1808,7 +1808,7 @@ class OptiManagerApp:
         container = ctk.CTkFrame(popup, fg_color="transparent")
         container.pack(fill="both", expand=True, padx=22, pady=(18, 12))
 
-        # 텍스트 표시 (message_text를 실제로 사용)
+
         text = message_text or "(No message)"
 
 
@@ -1969,7 +1969,7 @@ class OptiManagerApp:
         self.sheet_loading = False
         self.game_db = db if ok else {}
         self.module_download_links = module_links if ok else {}
-        # Link 시트 전체 키/값 디버깅 출력
+
         self.sheet_status = ok
         self._refresh_optiscaler_download_link_ui()
         self.apply_btn.configure(state="normal")
@@ -3701,15 +3701,33 @@ class OptiManagerApp:
             ingame_ini_name = str(game_data.get("ingame_ini", "")).strip()
             ingame_settings = dict(game_data.get("ingame_settings", {}) or {})
             if ingame_ini_name and ingame_settings:
-                ingame_ini_path = os.path.join(target_path, ingame_ini_name)
+                # Determine if ingame_ini_name is a full path (contains folder) or just a filename
+                if any(sep in ingame_ini_name for sep in ("/", "\\", ":")):
+                    # Treat as path, expand env vars
+                    expanded_path = os.path.expandvars(ingame_ini_name)
+                    expanded_path = os.path.expanduser(expanded_path)
+                    ingame_ini_path = expanded_path
+                else:
+                    # Just a filename, use game exe folder
+                    ingame_ini_path = os.path.join(target_path, ingame_ini_name)
+
                 if os.path.exists(ingame_ini_path):
-                    _ensure_file_writable(Path(ingame_ini_path))
-                    apply_ini_settings(ingame_ini_path, ingame_settings, force_frame_generation=False)
-                    logger.info(f"Applied in-game settings to {ingame_ini_path}")
+                    ini_file = Path(ingame_ini_path)
+                    # Check original read-only state
+                    orig_stat = ini_file.stat()
+                    orig_readonly = not (orig_stat.st_mode & stat.S_IWRITE)
+                    try:
+                        if orig_readonly:
+                            _ensure_file_writable(ini_file)
+                        apply_ini_settings(ingame_ini_path, ingame_settings, force_frame_generation=False)
+                        logger.info(f"Applied in-game settings to {ingame_ini_path}")
+                    finally:
+                        # Restore original read-only state
+                        if orig_readonly:
+                            _set_file_readonly(ini_file)
                 else:
                     logger.info(f"In-game ini not found, skipped: {ingame_ini_path}")
 
-            # engine.ini_location 폴더에 Engine.ini가 없으면 생성, engine.ini_type 셀의 값을 파싱해서 섹션/키별로 반영
             try:
                 engine_loc = str(game_data.get("engine_ini_location", "")).strip()
                 engine_ini_content = str(game_data.get("engine_ini_type", "")).strip()
