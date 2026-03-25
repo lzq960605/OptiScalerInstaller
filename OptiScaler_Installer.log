@@ -1,0 +1,32 @@
+2026-03-19 16:08:54,294 ERROR: Failed to load Google Sheet: name 'SHEET_ID' is not defined
+2026-03-19 16:09:45,802 INFO: GAME_DB loaded from Google Sheets (2 entries)
+2026-03-19 16:15:08,288 INFO: GAME_DB loaded from Google Sheets (2 entries)
+2026-03-20 08:41:57,202 INFO: GAME_DB loaded from Google Sheets (11 entries)
+2026-03-20 08:56:54,636 INFO: GAME_DB loaded from Google Sheets (11 entries)
+2026-03-20 08:57:45,655 INFO: Renamed OptiScaler.dll -> dxgi.dll
+2026-03-20 08:57:46,390 INFO: INI settings applied in-place: ['upscalers:dx12upscaler', 'framegen:fginput', 'framegen:fgoutput', 'xefg:interpolationcount', 'xefg:depthinverted', 'optifg:hudfix', 'optifg:hudlimit', 'spoofing:dxgi']
+2026-03-20 08:57:46,412 INFO: Frame Generation Enabled=True applied
+2026-03-23 12:11:00,902 INFO: GAME_DB loaded from Google Sheets (27 entries)
+2026-03-23 12:11:00,903 INFO: Download-link sheet loaded (8 modules)
+2026-03-23 12:13:45,655 INFO: GAME_DB loaded from Google Sheets (27 entries)
+2026-03-23 12:13:45,656 INFO: Download-link sheet loaded (8 modules)
+2026-03-23 12:15:32,174 INFO: GAME_DB loaded from Google Sheets (27 entries)
+2026-03-23 12:15:32,174 INFO: Download-link sheet loaded (8 modules)
+2026-03-23 12:16:40,542 INFO: GAME_DB loaded from Google Sheets (27 entries)
+2026-03-23 12:16:40,542 INFO: Download-link sheet loaded (8 modules)
+2026-03-23 12:17:49,094 INFO: GAME_DB loaded from Google Sheets (27 entries)
+2026-03-23 12:17:49,095 INFO: Download-link sheet loaded (8 modules)
+2026-03-23 12:20:38,559 INFO: GAME_DB loaded from Google Sheets (27 entries)
+2026-03-23 12:20:38,561 INFO: Download-link sheet loaded (8 modules)
+2026-03-23 12:21:39,248 INFO: GAME_DB loaded from Google Sheets (27 entries)
+2026-03-23 12:21:39,249 INFO: Download-link sheet loaded (8 modules)
+2026-03-23 12:22:04,608 INFO: Renamed OptiScaler.dll -> winmm.dll
+2026-03-23 12:22:07,411 INFO: REFramework dinput8.dll installed from URL: https://github.com/praydog/REFramework-nightly/releases/download/nightly-01298-f59350b3d4c00e1227e711214199d5a000e98796/MHWILDS.zip
+2026-03-23 12:22:09,398 INFO: OptiPatcher downloaded to C:/Program Files (x86)/Steam\plugins\OptiPatcher.asi
+2026-03-23 12:22:09,425 INFO: INI settings applied in-place: ['framegen:fginput', 'framegen:fgoutput', 'xefg:interpolationcount', 'xefg:depthinverted', 'optifg:hudfix', 'optifg:hudlimit', 'spoofing:dxgi', 'plugins:loadasiplugins']
+2026-03-23 12:22:09,445 INFO: Frame Generation Enabled=True applied
+2026-03-23 12:22:46,577 INFO: Renamed OptiScaler.dll -> winmm.dll
+2026-03-23 12:22:48,928 INFO: REFramework dinput8.dll installed from URL: https://github.com/praydog/REFramework-nightly/releases/download/nightly-01298-f59350b3d4c00e1227e711214199d5a000e98796/MHWILDS.zip
+2026-03-23 12:22:50,354 INFO: OptiPatcher downloaded to C:/Program Files (x86)/Steam\plugins\OptiPatcher.asi
+2026-03-23 12:22:50,384 INFO: INI settings applied in-place: ['framegen:fginput', 'framegen:fgoutput', 'xefg:interpolationcount', 'xefg:depthinverted', 'optifg:hudfix', 'optifg:hudlimit', 'spoofing:dxgi', 'plugins:loadasiplugins']
+2026-03-23 12:22:50,409 INFO: Frame Generation Enabled=True applied
