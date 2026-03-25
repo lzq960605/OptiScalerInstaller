@@ -53,6 +53,10 @@
 
 &nbsp;
 
+**All credit goes to OptiScaler Team for their hard work.**
+    > nitec, TheRazorMD, Fakemichau, Keu, By-U, Atsy, san9, Cryio
+
+&nbsp;
 
 ### **References**
 | Component | Repository Link |
