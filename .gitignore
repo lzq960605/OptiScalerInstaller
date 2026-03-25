@@ -1,0 +1,11 @@
+# Local configuration and scripts
+build.py
+.env
+
+# Python & PyInstaller artifacts
+__pycache__/
+build/
+dist/
+*.spec
+*.pyc
+temp_version.txt

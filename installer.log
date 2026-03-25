@@ -1,0 +1,13 @@
+2026-03-24 13:27:04,766 INFO: File logging initialized at C:\Users\SKTelecom\Git\OptiScalerInstaller\installer.log
+2026-03-24 13:27:12,942 WARNING: Skipping invalid #ingame_setting token (missing '=' or ':'): %LOCALAPPDATA%\SHf\Saved\Config\Windows\
+2026-03-24 13:27:14,909 INFO: Download-link module keys: __gpu_vendor__, __warning_en__, __warning_kr__, optipatcher, optiscaler, rtss_en, rtss_kr, unreal5
+2026-03-24 13:27:14,917 INFO: GAME_DB loaded from Google Sheets (27 entries)
+2026-03-24 13:27:14,918 INFO: Download-link sheet loaded (8 modules)
+2026-03-24 13:27:14,918 INFO: Entries with engine.ini_location: 0
+2026-03-25 10:13:48,585 INFO: File logging initialized at C:\Users\SKTelecom\Git\OptiScalerInstaller\installer.log
+2026-03-25 10:13:56,905 INFO: Download-link module keys: __gpu_vendor__, __warning_en__, __warning_kr__, optipatcher, optiscaler, rtss_en, rtss_kr, unreal5
+2026-03-25 10:13:56,915 INFO: GAME_DB loaded from Google Sheets (29 entries)
+2026-03-25 10:13:56,915 INFO: Download-link sheet loaded (8 modules)
+2026-03-25 10:13:56,915 INFO: Entries with engine.ini_location: 1
+2026-03-25 10:50:08,082 INFO: File logging initialized at C:\Users\SKTelecom\Git\OptiScalerInstaller\installer.log
+2026-03-25 10:50:26,221 INFO: File logging initialized at C:\Users\SKTelecom\Git\OptiScalerInstaller\installer.log
