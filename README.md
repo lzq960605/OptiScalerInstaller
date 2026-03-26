@@ -69,3 +69,7 @@
 | **REFramework** | [GitHub](https://github.com/praydog/reframework-nightly/releases) |
 
 &nbsp;
+
+
+![GitHub All Releases](https://img.shields.io/github/downloads/onehoon/OptiScalerInstaller/total?style=for-the-badge&color=orange)
+![GitHub last commit](https://img.shields.io/github/last-commit/onehoon/OptiScalerInstaller?style=for-the-badge)
