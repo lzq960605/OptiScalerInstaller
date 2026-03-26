@@ -16,7 +16,7 @@
 
 &nbsp;
 
-## 💻 Supported Hardware
+## 💻 Supported GPU
 ---
 - **Intel:** Lunar Lake, Meteor Lake
 - **AMD:** Radeon 780M, 890M, 8060S (AI Max+ 395)
