@@ -650,7 +650,13 @@ class OptiManagerApp:
             msg = str(val or "").strip()
             if not msg:
                 if USE_KOREAN:
-                    msg = "RTSS ?ㅼ젙 ?뺤씤???꾩슂?⑸땲??\n\n[Global]\nUseDetours=1\nReflexSetLatencyMarker=0\n\n???ㅼ젙???곸슜?섏뼱 ?덈뒗吏 ?뺤씤?댁＜?몄슂."
+                    msg = (
+                        "RTSS 설정을 확인해주세요.\n\n"
+                        "[Global]\n"
+                        "UseDetours=1\n"
+                        "ReflexSetLatencyMarker=0\n\n"
+                        "위 설정이 적용되어 있는지 확인해 주세요."
+                    )
                 else:
                     msg = "RTSS Configuration Check:\n\nPlease ensure the following settings in your Global profile:\nUseDetours=1\nReflexSetLatencyMarker=0"
             self._show_rtss_popup(msg)
@@ -813,7 +819,7 @@ class OptiManagerApp:
 
     def _on_close(self):
         if self.install_in_progress:
-            msg = "?ㅼ튂媛 吏꾪뻾 以묒엯?덈떎. ?꾨즺 ??醫낅즺?댁＜?몄슂." if USE_KOREAN else "Installation is in progress. Please wait."
+            msg = "설치가 진행 중입니다. 완료 후 종료해 주세요." if USE_KOREAN else "Installation is in progress. Please wait."
             messagebox.showwarning("Warning", msg)
             return
 
@@ -888,10 +894,10 @@ class OptiManagerApp:
         self._refresh_optiscaler_download_link_ui()
         self._update_install_button_state()
         self._update_sheet_status()
-        # --- 理쒖떊 踰꾩쟾 ?뺤씤 諛??낃렇?덉씠???좊룄 ---
+        # --- 최신 버전 확인 및 업그레이드 유도 ---
         self.check_app_update()
 
-        # --- 寃뚯엫 ?먮룞 ?ㅼ틪 ?몃━嫄?---
+        # --- 게임 자동 스캔 트리거 ---
         if ok:
             warning_key = "__warning_kr__" if USE_KOREAN else "__warning_en__"
             warning_text = str(self.module_download_links.get(warning_key, "")).strip()
@@ -926,7 +932,7 @@ class OptiManagerApp:
         except Exception as e:
             logging.warning(f"Version check failed: {e}")
 
-        # ?쒗듃 濡쒕뱶 ?깃났 ?щ?? 臾닿??섍쾶 RTSS ?ㅼ젙 泥댄겕 吏꾪뻾 (湲곕낯 硫붿떆吏 Fallback)
+        # 시트 로드 성공 이후 RTSS 설정 체크 진행 (기본 메시지 fallback)
         logger = None
         if getattr(self, "found_exe_list", None) and self.selected_game_index is not None:
             logger = get_game_logger(self.found_exe_list[self.selected_game_index].get("game_name", "unknown"))
@@ -1720,7 +1726,7 @@ class OptiManagerApp:
         if next_cols != self._grid_cols_current:
             delay_ms = 120
         else:
-            # ??媛쒖닔 蹂?붽? ?녿뜑?쇰룄 ?덈퉬 李⑥씠媛 ?щ㈃ ?ъ젙??(?덉쟾?μ튂)
+            # 열 개수 변화가 없어도 너비 차이가 크면 재정렬한다 (안전장치)
             if abs(current_w - self._last_reflow_width) < 20:
                 self._resize_in_progress = False
                 self._schedule_overflow_fit_check()
@@ -2757,4 +2763,8 @@ if __name__ == "__main__":
     root = ctk.CTk()
     app = OptiManagerApp(root)
     root.mainloop()
+
+
+
+
 
