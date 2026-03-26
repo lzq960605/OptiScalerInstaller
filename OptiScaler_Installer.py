@@ -1,5 +1,4 @@
-import os
-import csv
+﻿import os
 import io
 import shutil
 import subprocess
@@ -24,6 +23,9 @@ import unicodedata
 import ctypes
 import locale
 import stat
+import installer_services
+import ini_utils
+import sheet_loader
 if os.name == "nt":
     import winreg
 
@@ -102,52 +104,59 @@ def get_game_logger(game_name: str) -> logging.Logger:
 
 # File logging handler with fallbacks: app folder -> %LOCALAPPDATA% -> temp dir
 def _init_file_logger() -> Optional[Path]:
-    candidates = []
-    # When frozen, the primary target is the directory containing the executable.
-    # This ensures logs are created next to the .exe file.
-    if getattr(sys, 'frozen', False) and hasattr(sys, 'executable'):
+    candidates: list[Path] = []
+
+    try:
+        if getattr(sys, 'frozen', False) and hasattr(sys, 'executable'):
+            candidates.append(Path(sys.executable).resolve().parent)
+        else:
+            candidates.append(Path(__file__).resolve().parent)
+    except Exception:
+        pass
+
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        candidates.append(Path(local_app_data) / "OptiScalerInstaller")
+
+    candidates.append(Path(tempfile.gettempdir()) / "OptiScalerInstaller")
+
+    root_logger = logging.getLogger()
+    formatter = logging.Formatter("%(asctime)s %(levelname)s: %(message)s")
+
+    for directory in candidates:
         try:
-            exe_dir = Path(sys.executable).resolve().parent
-            candidates.append(exe_dir)
-        except Exception:
+            directory.mkdir(parents=True, exist_ok=True)
+            log_path = directory / "installer.log"
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write("")
+
+            for h in list(root_logger.handlers):
+                if isinstance(h, logging.FileHandler) and getattr(h, 'baseFilename', None) == str(log_path):
+                    root_logger.removeHandler(h)
+
             try:
+                from logging.handlers import RotatingFileHandler
+                fh = RotatingFileHandler(
+                    log_path,
+                    maxBytes=5 * 1024 * 1024,
+                    backupCount=3,
+                    encoding="utf-8"
+                )
+            except Exception:
+                fh = logging.FileHandler(log_path, encoding="utf-8")
 
-                if hasattr(sys, '_MEIPASS'):
-                    script_dir = Path(sys.executable).resolve().parent
-                else:
-                    script_dir = Path(__file__).resolve().parent
-                script_dir.mkdir(parents=True, exist_ok=True)
-                log_path = script_dir / "installer.log"
-                # ensure file is writable by opening for append
-                with open(log_path, "a", encoding="utf-8") as f:
-                    f.write("")
+            fh.setLevel(logging.INFO)
+            fh.setFormatter(formatter)
+            root_logger.addHandler(fh)
+            logging.info("File logging initialized at %s", log_path)
+            return log_path
+        except Exception as e:
+            try:
+                print(f"Warning: failed to initialize file logging at {directory}: {e}", file=sys.stderr)
+            except Exception:
+                pass
 
-                root_logger = logging.getLogger()
-                for h in list(root_logger.handlers):
-                    if isinstance(h, logging.FileHandler) and getattr(h, 'baseFilename', None) == str(log_path):
-                        root_logger.removeHandler(h)
-                try:
-                    from logging.handlers import RotatingFileHandler
-                    fh = RotatingFileHandler(
-                        log_path,
-                        maxBytes=5 * 1024 * 1024,
-                        backupCount=3,
-                        encoding="utf-8"
-                    )
-                except Exception:
-                    fh = logging.FileHandler(log_path, encoding="utf-8")
-
-                fh.setLevel(logging.INFO)
-                fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s: %(message)s"))
-                root_logger.addHandler(fh)
-                logging.info("File logging initialized at %s", log_path)
-                return log_path
-            except Exception as e:
-                try:
-                    print(f"Warning: failed to initialize file logging at {locals().get('script_dir', '?')}: {e}", file=sys.stderr)
-                except Exception:
-                    pass
-                return None
+    return None
 def _configure_logging():
     root = logging.getLogger()
     root.setLevel(logging.INFO)
@@ -175,18 +184,6 @@ try:
 except ModuleNotFoundError as e:
     logging.error("requests module not installed. Install: python -m pip install requests")
     raise e
-
-# Initialize a global session with retry logic for robust file downloads
-_file_session = requests.Session()
-_file_retry_strategy = Retry(
-    total=3,
-    backoff_factor=1,
-    status_forcelist=(429, 500, 502, 503, 504),
-    allowed_methods=("GET", "HEAD")
-)
-_file_adapter = HTTPAdapter(max_retries=_file_retry_strategy)
-_file_session.mount("https://", _file_adapter)
-_file_session.mount("http://", _file_adapter)
 
 def _subprocess_no_window_kwargs() -> dict:
     if os.name != "nt":
@@ -262,1254 +259,6 @@ def _is_korean_ui() -> bool:
 
 
 USE_KOREAN: bool = _is_korean_ui()
-
-
-def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
-    # Fetch with retry/backoff; do NOT use or write any local cache.
-    url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=csv&gid={gid}"
-
-    max_attempts = 3
-    backoff_base = 1.0
-    response = None
-    for attempt in range(1, max_attempts + 1):
-        try:
-            response = _file_session.get(url, timeout=15)
-            response.raise_for_status()
-            break
-        except Exception as e:
-            if attempt < max_attempts:
-                sleep_for = backoff_base * (2 ** (attempt - 1))
-                try:
-                    time.sleep(sleep_for)
-                except Exception:
-                    pass
-            else:
-                # All attempts failed — propagate the exception (no cache fallback)
-                raise
-
-    text = response.content.decode("utf-8-sig")
-
-    # Use StringIO so quoted multi-line cells (e.g., #information with line breaks)
-    # are parsed correctly instead of being flattened.
-    reader = csv.reader(io.StringIO(text, newline=""))
-    headers = next(reader, None)
-    # (No debug logging of parsed headers)
-    if not headers:
-        raise ValueError("Google Sheet has no header row")
-
-    columns = [c.strip().lower() for c in headers]
-
-
-    # One fetch + header parse only; per-row extraction happens in the single main loop below.
-
-    popup_kr_keys = ["popup_kr", "popup message kr", "popup message_kr", "popupkr", "popup_kr_message"]
-    popup_en_keys = ["popup_en", "popup message en", "popup message_en", "popupen", "popup_en_message"]
-    popup_kr_col = next((c for c in columns if c in popup_kr_keys), None)
-    popup_en_col = next((c for c in columns if c in popup_en_keys), None)
-    popup_kr_index = columns.index(popup_kr_col) if popup_kr_col else None
-    popup_en_index = columns.index(popup_en_col) if popup_en_col else None
-    # after_popup columns: enable per-row extraction below
-    after_popup_kr_keys = ["after_popup_kr", "after popup kr", "afterpopupkr"]
-    after_popup_en_keys = ["after_popup_en", "after popup en", "afterpopupen"]
-    after_popup_kr_col = next((c for c in columns if c in after_popup_kr_keys), None)
-    after_popup_en_col = next((c for c in columns if c in after_popup_en_keys), None)
-    after_popup_kr_index = columns.index(after_popup_kr_col) if after_popup_kr_col else None
-    after_popup_en_index = columns.index(after_popup_en_col) if after_popup_en_col else None
-    # Guide page URL to open after installation (optional)
-    guidepage_keys = ["guidepage_after_installation", "guide_page_after_installation", "guidepage", "after_installation_guide", "guide_url", "after_install_url"]
-    guidepage_col = next((c for c in columns if c in guidepage_keys), None)
-    guidepage_index = columns.index(guidepage_col) if guidepage_col else None
-
-    exe_keys = ["exe", "exe_name", "filename", "game_exe", "executable", "gamefile"]
-    display_keys = ["display", "game_name", "gamename", "name", "title", "display_name"]
-    dll_keys = ["dll_name", "dll", "dllname", "rename_dll", "target_dll"]
-    optipatcher_keys = ["optipatcher", "opti_patcher", "use_optipatcher", "opti patcher"]
-    unreal5_keys = ["unreal5", "unreal_5", "unreal5_url", "unreal5 patch", "unreal5_patch"]
-    reframework_keys = ["reframework", "reframework_url", "re_framework", "re_framework_url"]
-    information_keys = ["#information", "information", "info", "game_information"]
-    cover_keys = ["cover_image", "cover", "poster", "poster_url", "image_url", "cover_url"]
-    module_dl_keys = ["module_dl", "module", "module_name"]
-    ingame_ini_keys = ["#ingame_ini", "ingame_ini", "in_game_ini"]
-    ingame_setting_keys = ["#ingame_setting", "ingame_setting", "in_game_setting", "#ingame_settings", "ingame_settings"]
-    engine_ini_location_keys = ["engine.ini_location", "engine_ini_location", "engine location", "engine_location", "engine_folder", "engine folder"]
-    engine_ini_type_keys = ["engine.ini_type", "engine_ini_type", "engine type", "engine_type"]
-    display_kr_keys = ["game_name_kr", "display_kr", "name_kr"]
-    information_kr_keys = ["#information_kr", "information_kr", "info_kr"]
-
-    exe_col = next((c for c in columns if c in exe_keys), None)
-    display_col = next((c for c in columns if c in display_keys), None)
-    dll_col = next((c for c in columns if c in dll_keys), None)
-    optipatcher_col = next((c for c in columns if c in optipatcher_keys), None)
-    unreal5_col = next((c for c in columns if c in unreal5_keys), None)
-    reframework_col = next((c for c in columns if c in reframework_keys), None)
-    information_col = next((c for c in columns if c in information_keys), None)
-    cover_col = next((c for c in columns if c in cover_keys), None)
-    module_dl_col = next((c for c in columns if c in module_dl_keys), None)
-    ingame_ini_col = next((c for c in columns if c in ingame_ini_keys), None)
-    ingame_setting_col = next((c for c in columns if c in ingame_setting_keys), None)
-    engine_ini_location_col = next((c for c in columns if c in engine_ini_location_keys), None)
-    engine_ini_type_col = next((c for c in columns if c in engine_ini_type_keys), None)
-    display_kr_col = next((c for c in columns if c in display_kr_keys), None)
-    information_kr_col = next((c for c in columns if c in information_kr_keys), None)
-
-    if exe_col is None:
-        exe_col = next((c for c in columns if "exe" in c or "file" in c), None)
-    if display_col is None:
-        display_col = next((c for c in columns if "name" in c or "title" in c), None)
-    if dll_col is None:
-        dll_col = next((c for c in columns if "dll" in c), None)
-    if optipatcher_col is None:
-        optipatcher_col = next((c for c in columns if "opti" in c and "patcher" in c), None)
-    if unreal5_col is None:
-        unreal5_col = next((c for c in columns if "unreal5" in c or ("unreal" in c and "5" in c)), None)
-    if reframework_col is None:
-        reframework_col = next((c for c in columns if "reframework" in c or ("re" in c and "framework" in c)), None)
-    if information_col is None:
-        information_col = next((c for c in columns if "information" in c or c == "info"), None)
-    if cover_col is None:
-        cover_col = next((c for c in columns if "cover" in c or "poster" in c or "image" in c), None)
-    if module_dl_col is None:
-        module_dl_col = next((c for c in columns if "module" in c and "dl" in c), None)
-    if ingame_ini_col is None:
-        ingame_ini_col = next((c for c in columns if "ingame" in c and "ini" in c), None)
-    if ingame_setting_col is None:
-        ingame_setting_col = next((c for c in columns if "ingame" in c and "setting" in c), None)
-
-    if exe_col is None or display_col is None:
-        raise ValueError(
-            f"Google Sheet header does not include required columns: "
-            f"exe keys {exe_keys} and display keys {display_keys}. Actual headers: {columns}"
-        )
-
-    exe_index = columns.index(exe_col)
-    display_index = columns.index(display_col)
-    dll_index = columns.index(dll_col) if dll_col else None
-    optipatcher_index = columns.index(optipatcher_col) if optipatcher_col else None
-    unreal5_index = columns.index(unreal5_col) if unreal5_col else None
-    reframework_index = columns.index(reframework_col) if reframework_col else None
-    information_index = columns.index(information_col) if information_col else None
-    cover_index = columns.index(cover_col) if cover_col else None
-    module_dl_index = columns.index(module_dl_col) if module_dl_col else None
-    ingame_ini_index = columns.index(ingame_ini_col) if ingame_ini_col else None
-    ingame_setting_index = columns.index(ingame_setting_col) if ingame_setting_col else None
-    engine_ini_location_index = columns.index(engine_ini_location_col) if engine_ini_location_col else None
-    engine_ini_type_index = columns.index(engine_ini_type_col) if engine_ini_type_col else None
-    display_kr_index = columns.index(display_kr_col) if display_kr_col else None
-    information_kr_index = columns.index(information_kr_col) if information_kr_col else None
-
-    # Columns after a header named '#ini' are INI variable names
-    ini_marker_index = next((i for i, c in enumerate(columns) if c == "#ini"), None)
-    ini_var_indices = {}
-    if ini_marker_index is not None:
-        raw_headers = [h.strip() for h in headers]
-        for i in range(ini_marker_index + 1, len(columns)):
-            if columns[i].startswith("#"):
-                continue
-            ini_var_indices[i] = raw_headers[i]
-
-    db = {}
-    for sheet_order, row in enumerate(reader):
-        if not row:
-            continue
-        # Pad row to match header columns so trailing empty cells are addressable
-        if len(row) < len(columns):
-            row = list(row) + [""] * (len(columns) - len(row))
-        if len(row) <= max(exe_index, display_index):
-            continue
-
-        exe_path = row[exe_index].strip()
-        game_name = row[display_index].strip()
-        display_name = game_name or exe_path
-        dll_name = ""
-        optipatcher_enabled = False
-        unreal5_url = ""
-        unreal5_flag = False
-        reframework_url = ""
-        module_dl = ""
-        information = ""
-        ingame_ini_name = ""
-        ingame_settings = {}
-        game_name_kr = ""
-        information_kr = ""
-
-        cover_url = ""
-        if dll_index is not None and len(row) > dll_index:
-            dll_name = row[dll_index].strip()
-        if optipatcher_index is not None and len(row) > optipatcher_index:
-            optipatcher_enabled = _is_true_value(row[optipatcher_index])
-        if unreal5_index is not None and len(row) > unreal5_index:
-
-            val = row[unreal5_index].strip().lower()
-            if val in ("true", "1", "yes", "y", "on"): 
-                unreal5_flag = True
-            unreal5_url = _normalize_optional_url(row[unreal5_index]) if "," not in val and (val.startswith("http") or val.endswith(('.zip', '.7z'))) else ""
-        if reframework_index is not None and len(row) > reframework_index:
-            reframework_url = _normalize_optional_url(row[reframework_index])
-        if information_index is not None and len(row) > information_index:
-            information = row[information_index].replace("\r\n", "\n").replace("\r", "\n").strip()
-        if cover_index is not None and len(row) > cover_index:
-            cover_url = _normalize_optional_url(row[cover_index])
-        if module_dl_index is not None and len(row) > module_dl_index:
-            module_dl = str(row[module_dl_index]).strip().lower()
-        if ingame_ini_index is not None and len(row) > ingame_ini_index:
-            ingame_ini_name = row[ingame_ini_index].strip()
-        engine_ini_location = ""
-        engine_ini_type = ""
-        if engine_ini_location_index is not None and len(row) > engine_ini_location_index:
-            engine_ini_location = row[engine_ini_location_index].strip()
-        if engine_ini_type_index is not None and len(row) > engine_ini_type_index:
-            engine_ini_type = row[engine_ini_type_index].strip()
-        if ingame_setting_index is not None and len(row) > ingame_setting_index:
-            ingame_settings = _parse_pipe_ini_settings(row[ingame_setting_index])
-        if display_kr_index is not None and len(row) > display_kr_index:
-            game_name_kr = row[display_kr_index].strip()
-        if information_kr_index is not None and len(row) > information_kr_index:
-            information_kr = row[information_kr_index].replace("\r\n", "\n").replace("\r", "\n").strip()
-
-        popup_kr = ""
-        popup_en = ""
-        if popup_kr_index is not None and len(row) > popup_kr_index:
-            popup_kr = row[popup_kr_index].replace("\r\n", "\n").replace("\r", "\n").strip()
-        if popup_en_index is not None and len(row) > popup_en_index:
-            popup_en = row[popup_en_index].replace("\r\n", "\n").replace("\r", "\n").strip()
-
-        # after popup messages (may contain multi-line content)
-        after_popup_kr = ""
-        after_popup_en = ""
-        guidepage_after_installation = ""
-        if after_popup_kr_index is not None and len(row) > after_popup_kr_index:
-            after_popup_kr = row[after_popup_kr_index].replace("\r\n", "\n").replace("\r", "\n").strip()
-        if after_popup_en_index is not None and len(row) > after_popup_en_index:
-            after_popup_en = row[after_popup_en_index].replace("\r\n", "\n").replace("\r", "\n").strip()
-        if guidepage_index is not None and len(row) > guidepage_index:
-            raw_guide = str(row[guidepage_index]).strip()
-            norm_guide = _normalize_optional_url(raw_guide)
-            guidepage_after_installation = norm_guide
-
-        ini_settings = {}
-        for col_i, var_name in ini_var_indices.items():
-            if len(row) > col_i:
-                val = row[col_i].strip()
-                if val:
-                    # [Section]|Key 형태면 Section/Key로 분리, 아니면 Key만 사용
-                    if "|" in var_name:
-                        section, key = var_name.split("|", 1)
-                        section = section.strip().strip("[]")
-                        key = key.strip()
-                        if section and key:
-                            ini_settings[(section, key)] = val
-                        else:
-                            ini_settings[var_name] = val
-                    else:
-                        ini_settings[var_name] = val
-
-        if exe_path:
-            db[exe_path.lower()] = {
-                "sheet_order": sheet_order,
-                "display": display_name,
-                "game_name": game_name,
-                "game_name_kr": game_name_kr,
-                "dll_name": dll_name,
-                "ini_settings": ini_settings,
-                "optipatcher": optipatcher_enabled,
-                "unreal5_url": unreal5_url,
-                "unreal5": unreal5_flag,
-                "reframework_url": reframework_url,
-                "module_dl": module_dl,
-                "engine_ini_location": engine_ini_location,
-                "engine_ini_type": engine_ini_type,
-                "information": information,
-                "information_kr": information_kr,
-                "cover_url": cover_url,
-                "ingame_ini": ingame_ini_name,
-                "ingame_settings": ingame_settings,
-                "popup_kr": popup_kr,
-                "popup_en": popup_en,
-                "after_popup_kr": after_popup_kr,
-                "after_popup_en": after_popup_en,
-                "guidepage_after_installation": guidepage_after_installation,
-            }
-
-    return db
-
-
-def load_module_download_links_from_public_sheet(spreadsheet_id, gid=518993268):
-    """Load module download links from sheet columns: module_dl, version, download link, gpu rule."""
-    url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=csv&gid={gid}"
-    response = _file_session.get(url, timeout=15)
-    response.raise_for_status()
-
-    reader = csv.reader(io.StringIO(response.content.decode("utf-8-sig"), newline=""))
-    headers = next(reader, None)
-    if not headers:
-        return {}
-
-    cols = [str(h).strip().lower() for h in headers]
-    module_idx = next((i for i, c in enumerate(cols) if c in {"module_dl", "module", "module_name"}), None)
-    version_idx = next((i for i, c in enumerate(cols) if c in {"version", "ver", "버전", "버전 정보"}), None)
-    link_idx = next((i for i, c in enumerate(cols) if c in {"download", "download_link", "url", "downloadurl", "다운로드링크", "다운로드 링크", "c"}), None)
-    gpu_vendor_idx = next((i for i, c in enumerate(cols) if c in {"gpu vendor", "gpu_vendor", "vendor", "gpu"}), None)
-
-    # Fallback to A/B/C columns when explicit headers are missing.
-    if module_idx is None:
-        module_idx = 0 if len(cols) > 0 else None
-    if version_idx is None:
-        version_idx = 1 if len(cols) > 1 else None
-    if link_idx is None:
-        link_idx = 2 if len(cols) > 2 else None
-    if gpu_vendor_idx is None:
-        gpu_vendor_idx = 3 if len(cols) > 3 else None
-
-    if module_idx is None or link_idx is None:
-        return {}
-
-    mapping = {}
-
-    for row in reader:
-        if not row:
-            continue
-        if len(row) <= module_idx:
-            continue
-
-        module_key = _norm_key(row[module_idx])
-        if not module_key:
-            continue
-
-        # Optional startup warning rows: A="warning_kr" or "warning_en", B="message text"
-        if module_key in {"warning_kr", "warning_en"}:
-            warning_text = ""
-            if version_idx is not None and len(row) > version_idx:
-                warning_text = str(row[version_idx]).strip()
-            elif len(row) > module_idx + 1:
-                warning_text = str(row[module_idx + 1]).strip()
-            if warning_text:
-                mapping[f"__{module_key}__"] = warning_text
-            continue
-
-
-        if module_key in {"rtss_kr", "rtss_en"}:
-            rtss_text = ""
-            if version_idx is not None and len(row) > version_idx:
-                rtss_text = str(row[version_idx]).strip()
-            elif len(row) > module_idx + 1:
-                rtss_text = str(row[module_idx + 1]).strip()
-            if rtss_text:
-                mapping[module_key] = rtss_text
-            continue
-
-        # Allow global key/value row such as: A="GPU Vendor", B="All"|"Intel".
-        if module_key in {"gpu vendor", "gpu_vendor"}:
-            value = ""
-            if version_idx is not None and len(row) > version_idx:
-                value = str(row[version_idx]).strip().lower()
-            elif len(row) > module_idx + 1:
-                value = str(row[module_idx + 1]).strip().lower()
-            if value:
-                mapping["__gpu_vendor__"] = value
-            continue
-
-        if len(row) <= max(module_idx, link_idx):
-            continue
-
-        raw_link = str(row[link_idx]).strip()
-        download_url = _normalize_optional_url(raw_link)
-        if not download_url:
-            continue
-
-        version = ""
-        if version_idx is not None and len(row) > version_idx:
-            version = str(row[version_idx]).strip()
-
-        gpu_vendor = ""
-        if gpu_vendor_idx is not None and len(row) > gpu_vendor_idx:
-            gpu_vendor = str(row[gpu_vendor_idx]).strip().lower()
-
-        mapping[module_key] = {
-            "url": download_url,
-            "version": version,
-            "gpu_vendor": gpu_vendor,
-        }
-
-
-    return mapping
-
-
-def _is_true_value(value):
-    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
-def _normalize_optional_url(value):
-    raw = str(value).strip()
-    if not raw:
-        return ""
-    if raw.lower() in {"null", "none", "na", "n/a", "-"}:
-        return ""
-    low = raw.lower()
-    if low.startswith("http://") or low.startswith("https://"):
-        return raw
-
-    # Accept common bare forms like "example.com" or "www.example.com" by
-    # prepending https://. Reject values with spaces or that look like placeholders.
-    if " " in raw or "\n" in raw or low in {"null", "none", "na", "n/a", "-"}:
-        return ""
-
-    # Simple heuristic: contains a dot and no scheme -> assume it's a hostname/path
-    if "." in raw:
-        candidate = raw
-        if candidate.startswith("//"):
-            candidate = "https:" + candidate
-        elif not candidate.lower().startswith("http"):
-            candidate = "https://" + candidate
-        return candidate
-
-    return ""
-
-
-def _norm_key(s: Optional[str]) -> str:
-    """Normalize keys used for matching module names and engine types.
-
-    This trims, applies Unicode NFKC normalization, removes BOM/non-breaking
-    spaces and lowercases the result so lookups are stable across sheets.
-    """
-    if s is None:
-        return ""
-    t = str(s).strip()
-    t = unicodedata.normalize("NFKC", t)
-    t = t.replace("\u00A0", " ").replace("\uFEFF", "")
-    return t.lower()
-
-
-def _parse_pipe_ini_settings(raw_value):
-    """Parse `key=value|Section:key=value|"key": value` into settings dict."""
-    text = str(raw_value or "").strip()
-    if not text:
-        return {}
-
-    parsed = {}
-    for token in text.split("|"):
-        token = token.strip()
-        if not token:
-            continue
-        if "=" in token:
-            key, value = token.split("=", 1)
-        elif ":" in token:
-            # Supports JSON-like sheet value: "m_bFilmGrain": true
-            key, value = token.split(":", 1)
-        else:
-            logging.warning("Skipping invalid #ingame_setting token (missing '=' or ':'): %s", token)
-            continue
-
-        key = key.strip()
-        value = value.strip().rstrip(",")
-        if not key:
-            continue
-
-        if len(key) >= 2 and key[0] == key[-1] and key[0] in {'"', "'"}:
-            key = key[1:-1].strip()
-
-        # Support both plain key and explicit section:key syntax.
-        if ":" in key:
-            section, section_key = key.split(":", 1)
-            section = section.strip()
-            section_key = section_key.strip()
-            if section and section_key:
-                parsed[(section, section_key)] = value
-            else:
-                logging.warning("Skipping invalid #ingame_setting token (invalid section:key): %s", token)
-        else:
-            parsed[key] = value
-
-    return parsed
-
-
-# ---------------------------------------------------------------------------
-# Installation logic
-# ---------------------------------------------------------------------------
-
-OPTISCALER_DLL = "OptiScaler.dll"
-
-
-def install_from_source_folder(source_folder, target_path, dll_name=""):
-    """Copy all files from source_folder into target_path, preserving structure."""
-    if not os.path.isdir(source_folder):
-        raise ValueError(f"Invalid source folder: {source_folder}")
-
-    for dirpath, _, filenames in os.walk(source_folder):
-        rel_dir = os.path.relpath(dirpath, source_folder)
-        dest_dir = target_path if rel_dir == "." else os.path.join(target_path, rel_dir)
-        os.makedirs(dest_dir, exist_ok=True)
-        for fname in filenames:
-            src = os.path.join(dirpath, fname)
-            dst = os.path.join(dest_dir, fname)
-            shutil.copy2(src, dst)
-
-    _rename_optiscaler_dll(target_path, dll_name)
-
-
-def extract_archive(archive_path, target_path, logger=None):
-    """Extract .zip or .7z into target_path, preserving folder structure."""
-    ext = os.path.splitext(archive_path)[1].lower()
-    try:
-        # 1. Prefer Python's built-in zipfile for .zip (Safest for Korean/Unicode paths)
-        if ext == ".zip":
-            try:
-                with zipfile.ZipFile(archive_path, "r") as z:
-                    z.extractall(target_path)
-                if logger:
-                    logger.info(f"Extracted .zip archive {archive_path} to {target_path}")
-                return
-            except Exception as e:
-                if logger:
-                    logger.warning(f"Python zipfile extraction failed, trying tar fallback: {e}")
-                else:
-                    logging.warning("Python zipfile extraction failed, trying tar fallback: %s", e)
-
-        tar_exe = shutil.which("tar")
-        if tar_exe:
-            try:
-                subprocess.run(
-                    [tar_exe, "-xf", archive_path, "-C", target_path],
-                    check=True,
-                    **_subprocess_no_window_kwargs(),
-                )
-                if logger:
-                    logger.info(f"Extracted archive {archive_path} to {target_path} using tar.exe")
-                return
-            except subprocess.CalledProcessError as e:
-                if logger:
-                    logger.warning(f"tar.exe extraction failed ({archive_path}), falling back: {e}")
-                else:
-                    logging.warning("tar.exe extraction failed (%s), falling back: %s", archive_path, e)
-
-        # If zipfile failed above (and tar also failed or wasn't found), try zipfile one last time
-        # strictly to raise the error if it was the only option.
-        if ext == ".zip":
-            raise RuntimeError(f"Failed to extract .zip file: {archive_path}")
-
-        if ext == ".7z":
-            raise RuntimeError(
-                "Cannot extract .7z archive: no suitable extractor found. "
-                "On Windows 11, ensure 'tar.exe' is available (built-in)."
-            )
-
-        raise ValueError(f"Unsupported archive format: {ext}")
-    except Exception as e:
-        if logger:
-            logger.error(f"Failed to extract archive {archive_path} to {target_path}: {e}")
-        raise
-
-
-def _rename_optiscaler_dll(target_path, dll_name):
-    """Rename OptiScaler.dll to dll_name if dll_name is specified."""
-    if not dll_name:
-        return
-    src = os.path.join(target_path, OPTISCALER_DLL)
-    dst = os.path.join(target_path, dll_name)
-    if not os.path.exists(src):
-        logging.warning("%s not found in %s, skipping rename.", OPTISCALER_DLL, target_path)
-        return
-    if os.path.exists(dst):
-        os.remove(dst)
-    os.rename(src, dst)
-    logging.info("Renamed %s -> %s", OPTISCALER_DLL, dll_name)
-
-
-def apply_ini_settings(ini_path, settings, force_frame_generation=False):
-    """Update only existing INI keys in place while preserving comments and layout."""
-    if not settings:
-        return
-
-    p = Path(ini_path)
-    if not p.exists():
-        return
-
-    def _norm(s):
-        if s is None:
-            return s
-        return "".join(str(s).split()).lower()
-
-    def _strip_wrapping_quotes(s):
-        text = str(s).strip()
-        if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
-            return text[1:-1].strip()
-        return text
-
-    sectioned_targets = {}
-    unsectioned_targets = {}
-    for k, v in settings.items():
-        if isinstance(k, (list, tuple)) and len(k) == 2:
-            sec, key = k[0], k[1]
-            sectioned_targets.setdefault(_norm(sec), {})[_norm(key)] = str(v)
-        elif isinstance(k, str) and ":" in k:
-            sec, key = k.split(":", 1)
-            sectioned_targets.setdefault(_norm(sec), {})[_norm(key)] = str(v)
-        else:
-            unsectioned_targets[_norm(k)] = str(v)
-
-    try:
-        lines = p.read_text(encoding="utf-8").splitlines(keepends=True)
-    except Exception:
-        logging.exception("Failed to read INI for in-place update")
-        return
-
-    section_pattern = re.compile(r"^\s*\[([^\]]+)\]\s*(?:[;#].*)?$")
-    key_value_pattern = re.compile(r"^(\s*)([^=;#\r\n]+?)(\s*)=(.*)$")
-    key_colon_pattern = re.compile(r"^(\s*)([^:\r\n]+?)(\s*):(.*)$")
-    xefg_section_norm = _norm("XeFG")
-
-    def _split_line_ending(line):
-        if line.endswith("\r\n"):
-            return line[:-2], "\r\n"
-        if line.endswith("\n"):
-            return line[:-1], "\n"
-        if line.endswith("\r"):
-            return line[:-1], "\r"
-        return line, ""
-
-    def _split_value_and_comment(rest):
-        leading_ws_len = len(rest) - len(rest.lstrip())
-        leading_ws = rest[:leading_ws_len]
-        body = rest[leading_ws_len:]
-        comment_positions = [i for i, ch in enumerate(body) if ch in {";", "#"}]
-        if not comment_positions:
-            return leading_ws, ""
-        comment_start = min(comment_positions)
-        return leading_ws, body[comment_start:]
-
-    updated_lines = []
-    applied = []
-    current_section = None
-
-    for original_line in lines:
-        line_body, line_ending = _split_line_ending(original_line)
-        stripped = line_body.strip()
-
-        if not stripped or stripped.startswith(";") or stripped.startswith("#"):
-            updated_lines.append(original_line)
-            continue
-
-        section_match = section_pattern.match(line_body)
-        if section_match:
-            current_section = _norm(section_match.group(1))
-            updated_lines.append(original_line)
-            continue
-
-        kv_match = key_value_pattern.match(line_body)
-        delimiter = "="
-        if not kv_match:
-            kv_match = key_colon_pattern.match(line_body)
-            delimiter = ":"
-        if not kv_match:
-            updated_lines.append(original_line)
-            continue
-
-        prefix, key_text, key_space_before_delim, old_rest = kv_match.groups()
-        norm_key = _norm(_strip_wrapping_quotes(key_text))
-
-        # DepthInverted exists in multiple sections; only update the XeFG one.
-        if norm_key == "depthinverted" and current_section != xefg_section_norm:
-            updated_lines.append(original_line)
-            continue
-
-        new_value = None
-        if current_section and current_section in sectioned_targets:
-            new_value = sectioned_targets[current_section].get(norm_key)
-        if new_value is None:
-            new_value = unsectioned_targets.get(norm_key)
-
-        if new_value is None:
-            updated_lines.append(original_line)
-            continue
-
-        if delimiter == "=":
-            leading_ws, comment = _split_value_and_comment(old_rest)
-            rebuilt_rest = f"{leading_ws}{new_value}"
-            if comment:
-                rebuilt_rest += f" {comment}"
-        else:
-            leading_ws_len = len(old_rest) - len(old_rest.lstrip())
-            leading_ws = old_rest[:leading_ws_len]
-            has_trailing_comma = old_rest.strip().endswith(",")
-            rebuilt_rest = f"{leading_ws}{new_value}"
-            if has_trailing_comma:
-                rebuilt_rest += ","
-
-        updated_lines.append(
-            f"{prefix}{key_text}{key_space_before_delim}{delimiter}{rebuilt_rest}{line_ending}"
-        )
-
-        if current_section:
-            applied.append(f"{current_section}:{norm_key}")
-        else:
-            applied.append(norm_key)
-
-    try:
-        p.write_text("".join(updated_lines), encoding="utf-8")
-    except Exception:
-        logging.exception("Failed to write updated INI file")
-        return
-
-    logging.info("INI settings applied in-place: %s", applied)
-
-
-def download_to_file(url, dest_path, timeout=60, logger=None):
-    """Download a file with streaming writes to avoid high memory usage."""
-    try:
-        response = _file_session.get(url, timeout=timeout, stream=True)
-        response.raise_for_status()
-        p = Path(dest_path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        with p.open("wb") as f:
-            for chunk in response.iter_content(chunk_size=1024 * 256):
-                if chunk:
-                    f.write(chunk)
-        if logger:
-            logger.info(f"Downloaded file from {url} to {dest_path}")
-    except Exception as e:
-        if logger:
-            logger.error(f"Failed to download {url} to {dest_path}: {e}")
-        raise
-
-
-def _parse_version_text_to_ini_entries(version_text: str):
-    """Parse version text into a mapping: {section: {key: value, ...}, ...}.
-    Each line can contain pipe-separated tokens where the first token is a section
-    like [Section] and subsequent tokens are key=value pairs.
-    """
-    result = {}
-    if not version_text:
-        return result
-
-    for raw_line in str(version_text).splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        parts = [p.strip() for p in line.split("|") if p.strip()]
-        if not parts:
-            continue
-
-        # Default to global section if none specified at start
-        current_section = ""
-
-        for token in parts:
-            if token.startswith("[") and token.endswith("]"):
-                current_section = token[1:-1].strip()
-                continue
-
-            if "=" in token:
-                k, v = token.split("=", 1)
-                k = k.strip()
-                v = v.strip()
-                if k:
-                    result.setdefault(current_section, {})[k] = v
-            elif ":" in token:
-                k, v = token.split(":", 1)
-                k = k.strip()
-                v = v.strip()
-                if k:
-                    result.setdefault(current_section, {})[k] = v
-            else:
-                logging.warning("Skipping invalid engine.ini token (no '=' or ':'): %s", token)
-
-    return result
-
-
-def _ensure_file_writable(path: Path):
-    try:
-        # Add write permission for owner
-        cur_mode = path.stat().st_mode
-        path.chmod(cur_mode | stat.S_IWRITE)
-    except Exception:
-        logging.exception("Failed to make %s writable", path)
-
-
-def _set_file_readonly(path: Path):
-    try:
-        cur_mode = path.stat().st_mode
-        path.chmod(cur_mode & ~stat.S_IWRITE)
-    except Exception:
-        logging.exception("Failed to set %s readonly", path)
-
-
-
-def _get_engine_ini_path(raw_path: Optional[str], workspace_root: Optional[str] = None, logger=None) -> Optional[Path]:
-    """Resolve and prepare a Path for an Engine.ini file.
-
-    This will expand env vars and user home, resolve relative paths against
-    `workspace_root` (or CWD), and ensure the parent directory exists. If the
-    parent cannot be created due to permissions, the function will fall back to
-    `%LOCALAPPDATA%/OptiScalerInstaller` and then to the system temp directory.
-
-    Returns a Path (possibly non-existent file) or None on fatal error.
-    """
-    if not raw_path:
-        return None
-
-    raw = str(raw_path).strip()
-    if not raw:
-        return None
-
-    try:
-        raw = os.path.expandvars(raw)
-    except Exception:
-        if logger:
-            logger.exception(f"Failed to expand env vars in engine.ini path: {raw}")
-        else:
-            logging.exception("Failed to expand env vars in engine.ini path: %s", raw)
-
-    try:
-        raw = os.path.expanduser(raw)
-    except Exception:
-        if logger:
-            logger.exception(f"Failed to expand user in engine.ini path: {raw}")
-        else:
-            logging.exception("Failed to expand user in engine.ini path: %s", raw)
-
-    p = Path(raw)
-    if not p.is_absolute():
-        base = Path(workspace_root) if workspace_root else Path.cwd()
-        p = base.joinpath(p)
-
-    try:
-        p = p.resolve(strict=False)
-    except Exception:
-        p = Path(str(p))
-
-    # If a file was provided explicitly, use it; otherwise target Engine.ini
-    if p.suffix.lower() == ".ini" or p.name.lower() == "engine.ini":
-        target = p
-    else:
-        target = p / "Engine.ini"
-
-    parent = target.parent
-    try:
-        parent.mkdir(parents=True, exist_ok=True)
-        return target
-    except PermissionError as e:
-        msg = f"Permission denied creating {parent} (requested {raw_path}): {e}"
-        if logger:
-            logger.error(msg)
-        else:
-            logging.error("Permission denied creating %s (requested %s): %s", parent, raw_path, e)
-    except OSError as e:
-        msg = f"OS error creating {parent} (requested {raw_path}): {e}"
-        if logger:
-            logger.error(msg)
-        else:
-            logging.error("OS error creating %s (requested %s): %s", parent, raw_path, e)
-    except Exception as exc:
-        msg = f"Unexpected error creating {parent} for {raw_path}: {exc}"
-        if logger:
-            logger.exception(msg)
-        else:
-            logging.exception("Unexpected error creating %s for %s", parent, raw_path)
-
-    # Fallback: %LOCALAPPDATA%/OptiScalerInstaller
-    try:
-        la = os.environ.get("LOCALAPPDATA")
-        if la:
-            fallback = Path(la) / "OptiScalerInstaller" / target.name
-            fallback.parent.mkdir(parents=True, exist_ok=True)
-            if logger:
-                logger.info(f"Falling back to LOCALAPPDATA for engine.ini: {fallback}")
-            else:
-                logging.info("Falling back to LOCALAPPDATA for engine.ini: %s", fallback)
-            return fallback
-    except Exception as exc:
-        if logger:
-            logger.exception(f"Failed to fall back to LOCALAPPDATA for engine.ini: {exc}")
-        else:
-            logging.exception("Failed to fall back to LOCALAPPDATA for engine.ini")
-
-    # Final fallback: temp directory
-    try:
-        fallback = Path(tempfile.gettempdir()) / "OptiScalerInstaller" / target.name
-        fallback.parent.mkdir(parents=True, exist_ok=True)
-        logging.info("Falling back to temp dir for engine.ini: %s", fallback)
-        return fallback
-    except Exception:
-        logging.exception("Failed to fall back to temp dir for engine.ini")
-
-    return None
-
-
-
-def _find_or_create_engine_ini(folder_name: str, workspace_root: Optional[str] = None) -> Optional[Path]:
-    """Use the exact path specified in `folder_name` to find or create Engine.ini.
-
-    Behavior:
-    - If `folder_name` is an absolute path, use it directly as the target folder.
-    - If `folder_name` contains any path separators but is not absolute, resolve it
-      relative to `workspace_root` (or CWD if not provided).
-    - If `folder_name` is a simple folder name (no separators), treat it as a
-      folder name directly under `workspace_root` (or CWD). Do NOT search the
-      entire workspace for matching folder names.
-    - In the target folder, if a file named `engine.ini` (case-insensitive)
-      already exists, return its Path. Otherwise create `Engine.ini` and return it.
-    """
-    if workspace_root is None:
-        workspace_root = os.getcwd()
-
-    # Normalize input path and handle cases where a full file path (e.g. Engine.ini)
-    # was provided instead of a folder. Accept absolute paths, workspace-root
-    # relative paths, or simple folder names.
-    folder_raw = str(folder_name or "").strip()
-    # Normalize unicode and remove common invisible characters and outer quotes
-    try:
-        folder_raw = unicodedata.normalize("NFKC", folder_raw)
-    except Exception:
-        pass
-    folder_raw = folder_raw.replace("\u00A0", " ").replace("\uFEFF", "").strip()
-    if (folder_raw.startswith('"') and folder_raw.endswith('"')) or (
-        folder_raw.startswith("'") and folder_raw.endswith("'")
-    ):
-        folder_raw = folder_raw[1:-1].strip()
-    if not folder_raw:
-        logging.info("Empty engine.ini_location provided")
-        return None
-
-    # Expand environment variables (~, %VAR%) and user, then normalize separators
-    try:
-        folder_raw = os.path.expandvars(folder_raw)
-    except Exception:
-        pass
-    # If %VAR% tokens remain, replace them using os.environ (case-insensitive)
-    try:
-        if "%" in folder_raw:
-            def _replace_env(match):
-                name = match.group(1).strip()
-                val = os.environ.get(name) or os.environ.get(name.upper()) or os.environ.get(name.lower())
-                
-                # Fallback: If LOCALAPPDATA is missing in env, try to construct it from home
-                if not val and name.upper() == "LOCALAPPDATA":
-                    try:
-                        val = str(Path.home() / "AppData" / "Local")
-                    except Exception:
-                        pass
-                
-                if val is None:
-                    logging.warning("Environment variable %s not found when expanding engine.ini path", name)
-                    # Return the original string so we don't break the path structure (e.g. avoid '\SHf\...')
-                    return match.group(0)
-                return val
-
-            folder_raw_new = re.sub(r"%([^%]+)%", _replace_env, folder_raw)
-            if folder_raw_new != folder_raw:
-                logging.info("Expanded env vars in engine.ini path: %s -> %s", folder_raw, folder_raw_new)
-                folder_raw = folder_raw_new
-    except Exception:
-        logging.exception("Failed while replacing %VAR% tokens in engine.ini path: %s", folder_raw)
-    try:
-        from pathlib import Path
-
-        folder_raw = os.path.expanduser(folder_raw)
-        p_in = Path(folder_raw)
-    except Exception:
-        p_in = None
-
-    # If the input begins with a Windows-style environment variable like
-    # %LOCALAPPDATA%\..., expand the leading variable in a case-insensitive
-    # way and replace folder_raw with the expanded absolute path. This makes
-    # paths that rely on Windows env vars resolve correctly rather than
-    # falling back to workspace-relative resolution.
-    try:
-        m_var = re.match(r"^%([^%]+)%(?:[\\/](.*))?$", folder_raw)
-        if m_var:
-            var = m_var.group(1)
-            rest = m_var.group(2) or ""
-            val = os.environ.get(var) or os.environ.get(var.upper()) or os.environ.get(var.lower())
-            if val:
-                expanded = os.path.normpath(os.path.join(val, rest)) if rest else os.path.normpath(val)
-                logging.info("Expanded leading env var in engine.ini path: %s -> %s", folder_raw, expanded)
-                folder_raw = expanded
-                try:
-                    p_in = Path(folder_raw)
-                except Exception:
-                    p_in = None
-            else:
-                logging.warning("Environment variable %s not set for engine.ini path", var)
-    except Exception:
-        logging.exception("Error while expanding leading env var in engine.ini path: %s", folder_raw)
-
-    # If the input looks like a file (ends with .ini or named Engine.ini),
-    # treat its parent directory as the target folder.
-    if p_in is not None and (p_in.suffix.lower() == ".ini" or p_in.name.lower() == "engine.ini"):
-        target_dir = str(p_in.parent)
-    else:
-        # Determine target directory without searching other locations
-        if os.path.isabs(folder_raw):
-            target_dir = folder_raw
-        elif os.path.sep in folder_raw or (os.path.altsep and os.path.altsep in folder_raw):
-            # relative path with separators -> resolve against workspace_root
-            target_dir = os.path.normpath(os.path.join(workspace_root, folder_raw))
-        else:
-            # simple folder name -> treat as direct child of workspace_root
-            target_dir = os.path.normpath(os.path.join(workspace_root, folder_raw))
-
-    logging.info("Resolved engine.ini target_dir: %s from input: %s", target_dir, folder_raw)
-
-    try:
-        Path(target_dir).mkdir(parents=True, exist_ok=True)
-    except Exception:
-        logging.exception("Failed to ensure target directory for engine.ini: %s", target_dir)
-        return None
-
-    # Look for any file named engine.ini (case-insensitive) inside this folder only
-    try:
-        for fname in os.listdir(target_dir):
-            if fname.lower() == "engine.ini":
-                p_existing = Path(os.path.join(target_dir, fname))
-                logging.info("Found existing Engine.ini: %s", p_existing)
-                return p_existing
-    except Exception:
-        logging.exception("Failed to list directory for engine.ini: %s", target_dir)
-
-    # Not found -> create Engine.ini in the exact folder
-    p = Path(os.path.join(target_dir, "Engine.ini"))
-    try:
-        p.write_text("", encoding="utf-8")
-        logging.info("Created new INI: %s", p)
-        return p
-    except Exception:
-        logging.exception("Failed to create Engine.ini at %s", p)
-        return None
-
-
-def _upsert_ini_entries(ini_path: Path, section_map: dict):
-    """Insert or update keys in the ini file according to section_map.
-    section_map: {section_name: {key: value, ...}, ...} where section_name=="" means global.
-    """
-    # Ensure the INI file exists and is writable. Some machines may have the
-    # folder present but no Engine.ini file; attempting to read in that case
-    # raises FileNotFoundError which used to cause an early return and skip
-    # creating the file. Create an empty file if missing and clear readonly.
-    try:
-        if not ini_path.exists():
-            try:
-                ini_path.parent.mkdir(parents=True, exist_ok=True)
-            except Exception:
-                logging.debug("Parent dir create skipped or failed for: %s", ini_path.parent)
-            try:
-                ini_path.write_text("", encoding="utf-8")
-                logging.info("Created missing INI file for upsert: %s", ini_path)
-            except Exception:
-                logging.exception("Failed to create missing INI file: %s", ini_path)
-                return
-
-        # Ensure writable before reading/writing
-        try:
-            _ensure_file_writable(ini_path)
-        except Exception:
-            logging.exception("Failed to make INI writable before upsert: %s", ini_path)
-
-        try:
-            text = ini_path.read_text(encoding="utf-8")
-        except Exception:
-            logging.exception("Failed to read INI for upsert (will proceed with empty content): %s", ini_path)
-            text = ""
-    except Exception:
-        logging.exception("Unexpected error preparing INI for upsert: %s", ini_path)
-        return
-
-    lines = text.splitlines(keepends=True)
-    section_pattern = re.compile(r"^\s*\[([^\]]+)\]")
-
-    # Build section positions (case-insensitive, normalized)
-    def _norm_section(s):
-        return str(s or "").strip().lower()
-
-    sections = {}
-    current = ""
-    start_idx = 0
-    for i, raw in enumerate(lines):
-        m = section_pattern.match(raw)
-        if m:
-            sec = _norm_section(m.group(1))
-            if current != "":
-                sections[current] = (start_idx, i)
-            current = sec
-            start_idx = i
-    if current != "":
-        sections[current] = (start_idx, len(lines))
-
-    modified = False
-
-    # Helper to find key within a range (case-insensitive, normalize, allow spaces/quotes)
-    def _norm_key_for_ini(k):
-        return str(k or "").replace('"', '').replace("'", '').replace(' ', '').strip().lower()
-
-    def _find_key_in_range(key, start, end):
-        key_norm = _norm_key_for_ini(key)
-        # Allow keys with spaces, quotes, = or :
-        kv_re = re.compile(r"^\s*([\"']?)(.+?)\1\s*[:=]")
-        for idx in range(start, end):
-            m = kv_re.match(lines[idx])
-            if m:
-                k = _norm_key_for_ini(m.group(2))
-                if k == key_norm:
-                    return idx
-        return None
-
-    # Process each section
-    for sec, kvs in section_map.items():
-        norm_sec = _norm_section(sec)
-        if norm_sec == "":
-            # global keys: place at top of file before first section
-            insert_pos = 0
-            for key, value in kvs.items():
-                found = _find_key_in_range(key, 0, len(lines))
-                if found is not None:
-                    ending = "\n" if lines[found].endswith("\n") else ""
-                    lines[found] = f"{key}={value}{ending}"
-                    modified = True
-                else:
-                    lines.insert(insert_pos, f"{key}={value}\n")
-                    insert_pos += 1
-                    modified = True
-            continue
-
-        # Find section by normalized name
-        if norm_sec in sections:
-            start, end = sections[norm_sec]
-            insert_at = end
-            for key, value in kvs.items():
-                found = _find_key_in_range(key, start, end)
-                if found is not None:
-                    ending = "\n" if lines[found].endswith("\n") else ""
-                    prefix = re.match(r"^(\s*)", lines[found]).group(1)
-                    lines[found] = f"{prefix}{key}={value}{ending}"
-                    modified = True
-                else:
-                    lines.insert(insert_at, f"{key}={value}\n")
-                    insert_at += 1
-                    modified = True
-        else:
-            # create new section at end
-            if lines and not lines[-1].endswith("\n"):
-                lines[-1] = lines[-1] + "\n"
-            lines.append(f"[{sec}]\n")
-            for key, value in kvs.items():
-                lines.append(f"{key}={value}\n")
-            modified = True
-
-    if modified:
-        try:
-            ini_path.write_text("".join(lines), encoding="utf-8")
-            logging.info("Upserted INI entries into %s", ini_path)
-        except Exception:
-            logging.exception("Failed to write updated INI: %s", ini_path)
-
-
-def process_engine_ini_edits(spreadsheet_id: str, gid: int = 0, workspace_root: Optional[str] = None):
-    """Main entry: read sheet gid (default 0), find rows with engine.ini_location,
-    and apply engine.ini_type content (direct ini entries) to ini files.
-    """
-    # Fetch game sheet CSV
-    url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=csv&gid={gid}"
-    resp = _file_session.get(url, timeout=15)
-    resp.raise_for_status()
-    text = resp.content.decode("utf-8-sig")
-    reader = csv.reader(io.StringIO(text, newline=""))
-    headers = next(reader, None)
-    if not headers:
-        logging.warning("Sheet has no headers for engine.ini processing")
-        return
-
-    cols = [h.strip().lower() for h in headers]
-    loc_idx = next((i for i, c in enumerate(cols) if c in {"engine.ini_location", "engine_ini_location", "engine location", "engine_location"}), None)
-    type_idx = next((i for i, c in enumerate(cols) if c in {"engine.ini_type", "engine_ini_type", "engine type", "engine_type"}), None)
-
-    if loc_idx is None or type_idx is None:
-        logging.info("No engine.ini_location or engine.ini_type column found; skipping")
-        return
-
-    for row in reader:
-        if not row or len(row) <= max(loc_idx, type_idx):
-            continue
-        loc = str(row[loc_idx]).strip()
-        content = str(row[type_idx]).strip()
-        if not loc:
-            continue
-
-        ini_path = _find_or_create_engine_ini(loc, workspace_root=workspace_root)
-        if ini_path is None:
-            continue
-
-        # Ensure writable, edit, then set readonly
-        try:
-            _ensure_file_writable(ini_path)
-
-            if content:
-                section_map = _parse_version_text_to_ini_entries(content)
-                if section_map:
-                    _upsert_ini_entries(ini_path, section_map)
-            else:
-                logging.info("Engine.ini type content is empty; nothing to write")
-        finally:
-            # Always set to readonly per requirement
-            _set_file_readonly(ini_path)
-
-
-
-def install_optipatcher(target_path, url=OPTIPATCHER_URL, logger=None):
-    plugins_dir = os.path.join(target_path, "plugins")
-    os.makedirs(plugins_dir, exist_ok=True)
-
-    asi_path = os.path.join(plugins_dir, "OptiPatcher.asi")
-    download_to_file(url, asi_path, timeout=30, logger=logger)
-    if logger:
-        logger.info(f"OptiPatcher downloaded to {asi_path}")
-
-
-def install_unreal5_from_url(url, target_path, logger=None):
-    parsed = urlparse(url)
-    file_name = os.path.basename(parsed.path)
-    ext = os.path.splitext(file_name)[1].lower()
-    if ext not in {".zip", ".7z"}:
-        msg = f"Unreal5 URL must point to .zip or .7z archive: {url}"
-        if logger:
-            logger.error(msg)
-        raise ValueError(msg)
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        archive_path = str(Path(tmpdir) / (file_name or f"unreal5_patch{ext}"))
-        download_to_file(url, archive_path, timeout=60, logger=logger)
-        extract_archive(archive_path, target_path, logger=logger)
-        if logger:
-            logger.info(f"Unreal5 patch installed from URL: {url}")
-
-
-def install_reframework_dinput8_from_url(url, target_path, logger=None):
-    """Download REFramework zip and install only dinput8.dll into target_path."""
-    parsed = urlparse(url)
-    file_name = os.path.basename(parsed.path) or "reframework.zip"
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        archive_path = str(Path(tmpdir) / file_name)
-        download_to_file(url, archive_path, timeout=60, logger=logger)
-
-        with zipfile.ZipFile(archive_path, "r") as z:
-            dll_member = next(
-                (
-                    m for m in z.namelist()
-                    if not m.endswith("/") and os.path.basename(m).lower() == "dinput8.dll"
-                ),
-                None,
-            )
-
-            if not dll_member:
-                msg = "dinput8.dll not found inside reframework zip"
-                if logger:
-                    logger.error(msg)
-                raise FileNotFoundError(msg)
-
-            dst = os.path.join(target_path, "dinput8.dll")
-            with z.open(dll_member, "r") as src_fp, open(dst, "wb") as dst_fp:
-                shutil.copyfileobj(src_fp, dst_fp)
-        if logger:
-            logger.info(f"REFramework dinput8.dll installed from URL: {url}")
-
-
 # ---------------------------------------------------------------------------
 # Image helpers
 # ---------------------------------------------------------------------------
@@ -1681,6 +430,7 @@ class OptiManagerApp:
         self.gpu_info = "Checking GPU..."
         self.install_in_progress = False
         self.selected_game_index = None
+        self._game_popup_confirmed = False
         self.card_frames: list = []
         self.card_items: list = []
         self._hovered_card_index = None
@@ -1815,7 +565,8 @@ class OptiManagerApp:
         try:
             self.gpu_info = info
             if hasattr(self, 'gpu_lbl') and self.gpu_lbl:
-                self.gpu_lbl.configure(text=f"GPU : {self.gpu_info}")
+                self.gpu_lbl.configure(text=f"GPU: {self.gpu_info}")
+            self._update_install_button_state()
         except Exception:
             logging.exception("Failed to update GPU UI")
     def _show_after_install_popup(self, game: dict):
@@ -1899,7 +650,7 @@ class OptiManagerApp:
             msg = str(val or "").strip()
             if not msg:
                 if USE_KOREAN:
-                    msg = "RTSS 설정 확인이 필요합니다.\n\n[Global]\nUseDetours=1\nReflexSetLatencyMarker=0\n\n위 설정이 적용되어 있는지 확인해주세요."
+                    msg = "RTSS ?ㅼ젙 ?뺤씤???꾩슂?⑸땲??\n\n[Global]\nUseDetours=1\nReflexSetLatencyMarker=0\n\n???ㅼ젙???곸슜?섏뼱 ?덈뒗吏 ?뺤씤?댁＜?몄슂."
                 else:
                     msg = "RTSS Configuration Check:\n\nPlease ensure the following settings in your Global profile:\nUseDetours=1\nReflexSetLatencyMarker=0"
             self._show_rtss_popup(msg)
@@ -2007,13 +758,62 @@ class OptiManagerApp:
         popup.after(0, lambda p=popup: self._center_popup_on_root(p))
         popup.after(80, lambda p=popup: self._center_popup_on_root(p))
 
+    def _selected_game_has_supported_gpu(self) -> bool:
+        if not ENFORCE_GPU_CHECK:
+            return True
+        if self.selected_game_index is None or not (0 <= self.selected_game_index < len(self.found_exe_list)):
+            return True
+
+        game_data = self.found_exe_list[self.selected_game_index]
+        required_vendor = self._resolve_install_gpu_vendor(game_data)
+        return self._is_gpu_supported_for_install(required_vendor)
+
+    def _show_unsupported_gpu_popup(self):
+        messagebox.showerror(
+            "Unsupported GPU",
+            "Current GPU not supported.",
+        )
+
+    def _notify_if_selected_game_gpu_unsupported(self):
+        gpu_text = str(getattr(self, "gpu_info", "") or "").strip().lower()
+        if gpu_text in {"", "checking gpu...", "unknown"}:
+            return
+        if not self._selected_game_has_supported_gpu():
+            self._show_unsupported_gpu_popup()
+
+    def _update_install_button_state(self):
+        if not hasattr(self, "apply_btn"):
+            return
+
+        has_valid_game = (
+            self.selected_game_index is not None
+            and 0 <= self.selected_game_index < len(self.found_exe_list)
+        )
+        has_archive = bool(getattr(self, "opti_source_archive", ""))
+        has_supported_gpu = self._selected_game_has_supported_gpu() if has_valid_game else True
+        can_install = (
+            self.sheet_status
+            and not self.sheet_loading
+            and not self.install_in_progress
+            and has_valid_game
+            and has_archive
+            and has_supported_gpu
+            and getattr(self, "_game_popup_confirmed", False)
+        )
+
+        self.apply_btn.configure(
+            state="normal" if can_install else "disabled",
+            text="Install" if not self.install_in_progress else "Installing...",
+            fg_color=_ACCENT if can_install else _ACCENT_DISABLED,
+        )
+
     # ------------------------------------------------------------------
     # Async DB load
     # ------------------------------------------------------------------
 
     def _on_close(self):
         if self.install_in_progress:
-            msg = "설치가 진행 중입니다. 완료 후 종료해주세요." if USE_KOREAN else "Installation is in progress. Please wait."
+            msg = "?ㅼ튂媛 吏꾪뻾 以묒엯?덈떎. ?꾨즺 ??醫낅즺?댁＜?몄슂." if USE_KOREAN else "Installation is in progress. Please wait."
             messagebox.showwarning("Warning", msg)
             return
 
@@ -2065,13 +865,13 @@ class OptiManagerApp:
 
     def _load_game_db_worker(self):
         try:
-            db = load_game_db_from_public_sheet(SHEET_ID, SHEET_GID)
+            db = sheet_loader.load_game_db_from_public_sheet(SHEET_ID, SHEET_GID)
             if not db:
                 raise ValueError("Sheet has no data.")
 
             module_links = {}
             try:
-                module_links = load_module_download_links_from_public_sheet(SHEET_ID, DOWNLOAD_LINKS_SHEET_GID)
+                module_links = sheet_loader.load_module_download_links_from_public_sheet(SHEET_ID, DOWNLOAD_LINKS_SHEET_GID)
             except Exception as link_err:
                 logging.warning("Failed to load download-link sheet (gid=%s): %s", DOWNLOAD_LINKS_SHEET_GID, link_err)
 
@@ -2086,12 +886,12 @@ class OptiManagerApp:
 
         self.sheet_status = ok
         self._refresh_optiscaler_download_link_ui()
-        self.apply_btn.configure(state="normal", fg_color=_ACCENT)
+        self._update_install_button_state()
         self._update_sheet_status()
-        # --- 최신 버전 확인 및 업그레이드 유도 ---
+        # --- 理쒖떊 踰꾩쟾 ?뺤씤 諛??낃렇?덉씠???좊룄 ---
         self.check_app_update()
 
-        # --- 게임 자동 스캔 트리거 ---
+        # --- 寃뚯엫 ?먮룞 ?ㅼ틪 ?몃━嫄?---
         if ok:
             warning_key = "__warning_kr__" if USE_KOREAN else "__warning_en__"
             warning_text = str(self.module_download_links.get(warning_key, "")).strip()
@@ -2126,7 +926,7 @@ class OptiManagerApp:
         except Exception as e:
             logging.warning(f"Version check failed: {e}")
 
-        # 시트 로드 성공 여부와 무관하게 RTSS 설정 체크 진행 (기본 메시지 Fallback)
+        # ?쒗듃 濡쒕뱶 ?깃났 ?щ?? 臾닿??섍쾶 RTSS ?ㅼ젙 泥댄겕 吏꾪뻾 (湲곕낯 硫붿떆吏 Fallback)
         logger = None
         if getattr(self, "found_exe_list", None) and self.selected_game_index is not None:
             logger = get_game_logger(self.found_exe_list[self.selected_game_index].get("game_name", "unknown"))
@@ -2336,7 +1136,7 @@ class OptiManagerApp:
         for i, name in enumerate(names):
             ctk.CTkLabel(
                 list_frame,
-                text=f"· {name}",
+                text=f"- {name}",
                 font=ctk.CTkFont(family=FONT_UI, size=12),
                 text_color="#E3EAF3",
                 anchor="w",
@@ -2416,7 +1216,7 @@ class OptiManagerApp:
 
         self.gpu_lbl = ctk.CTkLabel(
             sub_frame,
-            text=f"GPU : {self.gpu_info}",
+            text=f"GPU: {self.gpu_info}",
             font=ctk.CTkFont(family=FONT_UI, size=11),
             text_color="#C5CFDB",
             anchor="w",
@@ -2426,7 +1226,7 @@ class OptiManagerApp:
         # Badge-style status indicator
         self.status_badge = ctk.CTkLabel(
             sub_frame,
-            text="  ● Game DB: Loading…  ",
+            text="  Game DB: Loading  ",
             font=ctk.CTkFont(family=FONT_UI, size=11, weight="bold"),
             text_color="#FFCB62",
             fg_color="#4B4330",
@@ -2455,7 +1255,7 @@ class OptiManagerApp:
 
         self.btn_select_folder = ctk.CTkButton(
             row,
-            text="Browse…",
+            text="Browse...",
             width=110,
             height=32,
             corner_radius=8,
@@ -2640,6 +1440,7 @@ class OptiManagerApp:
 
         self._refresh_optiscaler_download_link_ui()
         self._set_information_text("Select a game to view information.")
+        self._update_install_button_state()
 
     def _refresh_optiscaler_download_link_ui(self):
         if not hasattr(self, "lbl_optiscaler_link_title"):
@@ -2662,7 +1463,7 @@ class OptiManagerApp:
         else:
             version = ""
 
-        version_text = f"Latest Version : {version}" if version else "Latest Version: -"
+        version_text = f"Latest Version: {version}" if version else "Latest Version: -"
 
         if self._optiscaler_download_url:
             self.lbl_optiscaler_link_title.configure(
@@ -2720,20 +1521,20 @@ class OptiManagerApp:
     def _update_sheet_status(self):
         if self.sheet_loading:
             self.status_badge.configure(
-                text="  ● Game DB: Loading…  ",
+                text="  Game DB: Loading  ",
                 text_color="#FFCB62",
                 fg_color="#4B4330",
             )
             return
         if self.sheet_status:
             self.status_badge.configure(
-                text="  ● Game DB: Online  ",
+                text="  Game DB: Online  ",
                 text_color="#7EE1AA",
                 fg_color="#244336",
             )
         else:
             self.status_badge.configure(
-                text="  ● Game DB: Offline  ",
+                text="  Game DB: Offline  ",
                 text_color="#FF8A8A",
                 fg_color="#4A2F34",
             )
@@ -2808,8 +1609,10 @@ class OptiManagerApp:
         self._ctk_images.clear()  # Release stale PhotoImage refs to prevent accumulation.
         if not keep_selection:
             self.selected_game_index = None
+            self._game_popup_confirmed = False
             self._set_information_text("")
         self._hovered_card_index = None
+        self._update_install_button_state()
 
     def _get_effective_widget_scale(self) -> float:
         try:
@@ -2917,7 +1720,7 @@ class OptiManagerApp:
         if next_cols != self._grid_cols_current:
             delay_ms = 120
         else:
-            # 열 개수 변화가 없더라도 너비 차이가 크면 재정렬 (안전장치)
+            # ??媛쒖닔 蹂?붽? ?녿뜑?쇰룄 ?덈퉬 李⑥씠媛 ?щ㈃ ?ъ젙??(?덉쟾?μ튂)
             if abs(current_w - self._last_reflow_width) < 20:
                 self._resize_in_progress = False
                 self._schedule_overflow_fit_check()
@@ -3534,23 +2337,29 @@ class OptiManagerApp:
 
         # Popup confirmation logic
         self._game_popup_confirmed = False
+        self._update_install_button_state()
         if 0 <= index < len(self.found_exe_list):
             game = self.found_exe_list[index]
             self._set_information_text(game.get("information", ""))
+            gpu_text = str(getattr(self, "gpu_info", "") or "").strip().lower()
+            if gpu_text not in {"", "checking gpu...", "unknown"} and not self._selected_game_has_supported_gpu():
+                self._game_popup_confirmed = True
+                self._update_install_button_state()
+                self._show_unsupported_gpu_popup()
+                return
             popup_msg = ""
             if USE_KOREAN:
                 popup_msg = game.get("popup_kr", "").strip()
             else:
                 popup_msg = game.get("popup_en", "").strip()
             if popup_msg:
-                self.apply_btn.configure(state="disabled", fg_color=_ACCENT_DISABLED)
                 def _on_confirm():
                     self._game_popup_confirmed = True
-                    self.apply_btn.configure(state="normal", fg_color=_ACCENT)
+                    self._update_install_button_state()
                 self._show_game_selection_popup(popup_msg, on_confirm=_on_confirm)
             else:
                 self._game_popup_confirmed = True
-                self.apply_btn.configure(state="normal", fg_color=_ACCENT)
+                self._update_install_button_state()
 
     # ------------------------------------------------------------------
     # File dialogs
@@ -3562,6 +2371,7 @@ class OptiManagerApp:
             return
         self.opti_source_archive = path
         self.lbl_opti_path.configure(text="OptiScaler Selected", text_color="#F1F5F9")
+        self._update_install_button_state()
 
     def select_game_folder(self):
         if self.sheet_loading:
@@ -3657,7 +2467,7 @@ class OptiManagerApp:
         self.btn_select_folder.configure(state="normal")
         count = len(self.found_exe_list)
         self.lbl_game_path.configure(
-            text=f"Supported Games : {count}",
+            text=f"Detected Games: {count}",
             text_color="#F1F5F9",
         )
         if count > 0:
@@ -3694,7 +2504,7 @@ class OptiManagerApp:
         self._schedule_games_scrollregion_refresh()
 
         self.lbl_game_path.configure(
-            text=f"Supported Games : {len(self.found_exe_list)}",
+            text=f"Detected Games: {len(self.found_exe_list)}",
             text_color="#F1F5F9",
         )
 
@@ -3766,18 +2576,14 @@ class OptiManagerApp:
             return
 
         game_data = dict(self.found_exe_list[self.selected_game_index])
-        required_vendor = self._resolve_install_gpu_vendor(game_data)
-        if not self._is_gpu_supported_for_install(required_vendor):
-            messagebox.showerror(
-                "Unsupported GPU",
-                "Current GPU not supported.",
-            )
+        if not self._selected_game_has_supported_gpu():
+            self._show_unsupported_gpu_popup()
             return
 
         source_archive = self.opti_source_archive
 
         self.install_in_progress = True
-        self.apply_btn.configure(state="disabled", text="Installing…", fg_color=_ACCENT_DISABLED)
+        self.apply_btn.configure(state="disabled", text="Installing...", fg_color=_ACCENT_DISABLED)
 
         self._task_executor.submit(self._apply_optiscaler_worker, game_data, source_archive)
 
@@ -3786,13 +2592,13 @@ class OptiManagerApp:
         logger = get_game_logger(game_data.get("game_name", "unknown"))
         try:
             with tempfile.TemporaryDirectory() as tmpdir:
-                extract_archive(source_archive, tmpdir)
+                installer_services.extract_archive(source_archive, tmpdir)
                 contents = os.listdir(tmpdir)
                 if len(contents) == 1 and os.path.isdir(os.path.join(tmpdir, contents[0])):
                     actual_source = os.path.join(tmpdir, contents[0])
                 else:
                     actual_source = tmpdir
-                install_from_source_folder(actual_source, target_path, dll_name=game_data.get("dll_name", ""))
+                installer_services.install_from_source_folder(actual_source, target_path, dll_name=game_data.get("dll_name", ""))
                 logger.info(f"Extracted and installed files to {target_path}")
 
             module_key = str(game_data.get("module_dl", "")).strip().lower()
@@ -3803,11 +2609,11 @@ class OptiManagerApp:
                 unreal_url = unreal_link_entry["url"]
 
             if game_data.get("unreal5") and unreal_url:
-                install_unreal5_from_url(unreal_url, target_path)
+                installer_services.install_unreal5_from_url(unreal_url, target_path)
                 logger.info(f"Installed Unreal5 patch from {unreal_url} to {target_path}")
 
             if game_data.get("reframework_url"):
-                install_reframework_dinput8_from_url(game_data["reframework_url"], target_path)
+                installer_services.install_reframework_dinput8_from_url(game_data["reframework_url"], target_path)
                 logger.info(f"Installed REFramework dinput8.dll from {game_data['reframework_url']} to {target_path}")
 
             ini_path = os.path.join(target_path, "OptiScaler.ini")
@@ -3821,11 +2627,11 @@ class OptiManagerApp:
                 opti_url = OPTIPATCHER_URL
                 if isinstance(opti_link_entry, dict):
                     opti_url = opti_link_entry.get("url", OPTIPATCHER_URL)
-                install_optipatcher(target_path, url=opti_url)
+                installer_services.install_optipatcher(target_path, url=opti_url)
                 merged_ini_settings["LoadAsiPlugins"] = "True"
                 logger.info(f"Installed OptiPatcher from {opti_url} to {target_path}")
 
-            apply_ini_settings(ini_path, merged_ini_settings, force_frame_generation=True)
+            ini_utils.apply_ini_settings(ini_path, merged_ini_settings, force_frame_generation=True)
             logger.info(f"Applied ini settings to {ini_path}")
 
             # Optional in-game ini patching from sheet columns:
@@ -3852,13 +2658,13 @@ class OptiManagerApp:
                     orig_readonly = not (orig_stat.st_mode & stat.S_IWRITE)
                     try:
                         if orig_readonly:
-                            _ensure_file_writable(ini_file)
-                        apply_ini_settings(ingame_ini_path, ingame_settings, force_frame_generation=False)
+                            ini_utils._ensure_file_writable(ini_file)
+                        ini_utils.apply_ini_settings(ingame_ini_path, ingame_settings, force_frame_generation=False)
                         logger.info(f"Applied in-game settings to {ingame_ini_path}")
                     finally:
                         # Restore original read-only state
                         if orig_readonly:
-                            _set_file_readonly(ini_file)
+                            ini_utils._set_file_readonly(ini_file)
                 else:
                     logger.info(f"In-game ini not found, skipped: {ingame_ini_path}")
 
@@ -3868,34 +2674,37 @@ class OptiManagerApp:
                 logger.info(f"engine.ini info for install: target={target_path}, engine_ini_location='{engine_loc}'")
                 
                 if engine_loc and engine_ini_content:
-                    ini_path = _find_or_create_engine_ini(engine_loc, workspace_root=target_path)
+                    ini_path = ini_utils._find_or_create_engine_ini(engine_loc, workspace_root=target_path)
                     
                     if ini_path:
                         try:
-                            _ensure_file_writable(ini_path)
-                            section_map = _parse_version_text_to_ini_entries(engine_ini_content)
+                            ini_utils._ensure_file_writable(ini_path)
+                            section_map = ini_utils._parse_version_text_to_ini_entries(engine_ini_content)
                             
                             if section_map:
-                                _upsert_ini_entries(ini_path, section_map)
+                                ini_utils._upsert_ini_entries(ini_path, section_map)
                                 logger.info(f"Upserted engine.ini entries to {ini_path}")
                         finally:
-                            _set_file_readonly(ini_path)
+                            ini_utils._set_file_readonly(ini_path)
             except Exception:
                 logging.exception("Failed while handling engine.ini for %s", target_path)
 
-            self.root.after(0, lambda: self._on_install_finished(True, "Install Completed"))
+            self.root.after(
+                0,
+                lambda game=dict(game_data): self._on_install_finished(True, "Install Completed", game),
+            )
         except Exception as e:
-            self.root.after(0, lambda err=e: self._on_install_finished(False, str(err)))
+            self.root.after(
+                0,
+                lambda err=e, game=dict(game_data): self._on_install_finished(False, str(err), game),
+            )
 
-    def _on_install_finished(self, success, message):
+    def _on_install_finished(self, success, message, installed_game=None):
         self.install_in_progress = False
-        self.apply_btn.configure(state="normal", text="Install", fg_color=_ACCENT)
+        self._update_install_button_state()
 
         if success:
-            # Use after_popup_kr/en if present, else fallback
-            game = self.found_exe_list[self.selected_game_index] if hasattr(self, 'selected_game_index') and self.selected_game_index is not None and self.selected_game_index < len(self.found_exe_list) else {}
-            # Debug logging to help diagnose missing guide URL / popup behavior
-            pass
+            game = installed_game if isinstance(installed_game, dict) else {}
             self._show_after_install_popup(game)
         else:
             messagebox.showerror("Error", f"An error occurred during installation: {message}")
@@ -3910,7 +2719,7 @@ class OptiManagerApp:
 
         ctk.CTkLabel(
             popup,
-            text="✓  " + message,
+            text=message,
             font=ctk.CTkFont(family=FONT_HEADING, size=14, weight="bold"),
             text_color="#2CC826",
             padx=30,
@@ -3940,7 +2749,7 @@ if __name__ == "__main__":
     if "--edit-engine-ini" in sys.argv:
         logging.info("Running engine.ini edits from Google Sheet (gid=%s)", SHEET_GID)
         try:
-            process_engine_ini_edits(SHEET_ID, gid=SHEET_GID)
+            ini_utils.process_engine_ini_edits(SHEET_ID, gid=SHEET_GID)
         except Exception:
             logging.exception("engine.ini edit run failed")
         sys.exit(0)
@@ -3948,3 +2757,4 @@ if __name__ == "__main__":
     root = ctk.CTk()
     app = OptiManagerApp(root)
     root.mainloop()
+
