@@ -22,8 +22,9 @@
 - **AMD:** Radeon 780M, 890M, 8060S (AI Max+ 395)
 <br>
 
-> **Note:** The default installation option is **XeSS + XeFG**. 
-> If you prefer **FSR**, you can switch it manually via the OptiScaler overlay (Press `Insert` key in-game).
+> **Note:** The default installation option is **XeSS + XeFG**
+&nbsp;
+> If you prefer **FSR**, you can switch it manually via the OptiScaler overlay (Press `Insert` key in-game)
 
 &nbsp;
 
