@@ -11,7 +11,8 @@
 ## 📋 Requirements
 ---
 * **Internet Connection:** Required to load the latest game DB from Google Sheets.
-* **OptiScaler Version:** `v0.9.0-pre11 (20260311)_RC4.5` or later.&nbsp;
+* **OptiScaler Version:** `v0.9.0-pre11 (20260311)_RC4.5` or later.
+    >
     > ⚠️ **IMPORTANT:** GitHub version (v0.7.9) is **NOT supported** (No XeFG, No XeMFG)
     >
     > Please download the latest from the **OptiScaler Discord**.
