@@ -5,21 +5,10 @@ import time
 import unicodedata
 from typing import Optional
 
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+from network_utils import build_retry_session
 
 
-_file_session = requests.Session()
-_file_retry_strategy = Retry(
-    total=3,
-    backoff_factor=1,
-    status_forcelist=(429, 500, 502, 503, 504),
-    allowed_methods=("GET", "HEAD"),
-)
-_file_adapter = HTTPAdapter(max_retries=_file_retry_strategy)
-_file_session.mount("https://", _file_adapter)
-_file_session.mount("http://", _file_adapter)
+_file_session = build_retry_session()
 
 
 def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
@@ -290,8 +279,8 @@ def load_module_download_links_from_public_sheet(spreadsheet_id, gid=518993268):
 
     cols = [str(h).strip().lower() for h in headers]
     module_idx = next((i for i, c in enumerate(cols) if c in {"module_dl", "module", "module_name"}), None)
-    version_idx = next((i for i, c in enumerate(cols) if c in {"version", "ver", "踰꾩쟾", "踰꾩쟾 ?뺣낫"}), None)
-    link_idx = next((i for i, c in enumerate(cols) if c in {"download", "download_link", "url", "downloadurl", "?ㅼ슫濡쒕뱶留곹겕", "?ㅼ슫濡쒕뱶 留곹겕", "c"}), None)
+    version_idx = next((i for i, c in enumerate(cols) if c in {"version", "ver", "filename", "file_name", "archive_name", "file"}), None)
+    link_idx = next((i for i, c in enumerate(cols) if c in {"download", "download_link", "url", "downloadurl", "c"}), None)
     gpu_vendor_idx = next((i for i, c in enumerate(cols) if c in {"gpu vendor", "gpu_vendor", "vendor", "gpu"}), None)
 
     if module_idx is None:
@@ -335,6 +324,16 @@ def load_module_download_links_from_public_sheet(spreadsheet_id, gid=518993268):
                 mapping[module_key] = rtss_text
             continue
 
+        if module_key == "exclude_list":
+            exclude_text = ""
+            if version_idx is not None and len(row) > version_idx:
+                exclude_text = str(row[version_idx]).strip()
+            elif len(row) > module_idx + 1:
+                exclude_text = str(row[module_idx + 1]).strip()
+            if exclude_text:
+                mapping["__exclude_list__"] = exclude_text
+            continue
+
         if module_key in {"gpu vendor", "gpu_vendor"}:
             value = ""
             if version_idx is not None and len(row) > version_idx:
@@ -364,6 +363,7 @@ def load_module_download_links_from_public_sheet(spreadsheet_id, gid=518993268):
         mapping[module_key] = {
             "url": download_url,
             "version": version,
+            "filename": version,
             "gpu_vendor": gpu_vendor,
         }
 

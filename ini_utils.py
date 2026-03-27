@@ -9,21 +9,10 @@ import unicodedata
 from pathlib import Path
 from typing import Optional
 
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+from network_utils import build_retry_session
 
 
-_file_session = requests.Session()
-_file_retry_strategy = Retry(
-    total=3,
-    backoff_factor=1,
-    status_forcelist=(429, 500, 502, 503, 504),
-    allowed_methods=("GET", "HEAD"),
-)
-_file_adapter = HTTPAdapter(max_retries=_file_retry_strategy)
-_file_session.mount("https://", _file_adapter)
-_file_session.mount("http://", _file_adapter)
+_file_session = build_retry_session()
 
 
 def apply_ini_settings(ini_path, settings, force_frame_generation=False):

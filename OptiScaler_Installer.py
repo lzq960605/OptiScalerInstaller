@@ -278,6 +278,9 @@ WINDOW_W = GRID_W
 WINDOW_H = 710
 PLACEHOLDER_BG = "#3a414c"
 PLACEHOLDER_FG = "#9fb0c5"
+LOCAL_APPDATA_DIR = Path(os.environ.get("LOCALAPPDATA") or Path(tempfile.gettempdir()))
+APP_CACHE_DIR = LOCAL_APPDATA_DIR / "OptiScalerInstaller"
+OPTISCALER_CACHE_DIR = APP_CACHE_DIR / "cache" / "optiscaler"
 # Store poster cache in system temp to avoid writing beside the executable.
 POSTER_CACHE_DIR = Path(tempfile.gettempdir()) / "OptiScalerInstaller" / "posters"
 APP_BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -421,6 +424,12 @@ class OptiManagerApp:
 
         self.game_folder = ""
         self.opti_source_archive = ""
+        self.optiscaler_cache_dir = OPTISCALER_CACHE_DIR
+        self.optiscaler_cache_dir.mkdir(parents=True, exist_ok=True)
+        self.optiscaler_archive_ready = False
+        self.optiscaler_archive_downloading = False
+        self.optiscaler_archive_error = ""
+        self.optiscaler_archive_filename = ""
         self.found_exe_list = []
         self.game_db = {}
         self.module_download_links = {}
@@ -449,6 +458,7 @@ class OptiManagerApp:
         self._image_session = self._build_retry_session()
         self._image_executor = ThreadPoolExecutor(max_workers=IMAGE_MAX_WORKERS, thread_name_prefix="cover-loader")
         self._task_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="general-task")
+        self._download_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="archive-download")
         self._pending_image_jobs: dict = {}
         self._inflight_image_futures: dict = {}
         self._failed_image_jobs: dict = {}
@@ -569,6 +579,33 @@ class OptiManagerApp:
             self._update_install_button_state()
         except Exception:
             logging.exception("Failed to update GPU UI")
+
+    def _align_supported_games_count_label(self):
+        try:
+            if not hasattr(self, "lbl_game_path") or not hasattr(self, "status_badge") or not hasattr(self, "scan_row"):
+                return
+            if not self.lbl_game_path.winfo_exists() or not self.status_badge.winfo_exists() or not self.scan_row.winfo_exists():
+                return
+
+            self.root.update_idletasks()
+            label_width = max(self.lbl_game_path.winfo_reqwidth(), self.lbl_game_path.winfo_width())
+            if label_width <= 1:
+                return
+
+            badge_center_root = self.status_badge.winfo_rootx() + (self.status_badge.winfo_width() / 2.0)
+            row_root_x = self.scan_row.winfo_rootx()
+            desired_left = int(round(badge_center_root - row_root_x - (label_width / 2.0)))
+
+            button_right = 0
+            if hasattr(self, "btn_select_folder") and self.btn_select_folder.winfo_exists():
+                button_right = self.btn_select_folder.winfo_x() + self.btn_select_folder.winfo_width() + 18
+
+            row_width = max(1, self.scan_row.winfo_width())
+            max_left = max(button_right, row_width - label_width - 20)
+            clamped_left = max(button_right, min(desired_left, max_left))
+            self.lbl_game_path.place_configure(x=clamped_left, rely=0.5, anchor="w")
+        except Exception:
+            logging.debug("Failed to align supported-games count label", exc_info=True)
     def _show_after_install_popup(self, game: dict):
         # Determine language
         import locale
@@ -795,14 +832,14 @@ class OptiManagerApp:
             self.selected_game_index is not None
             and 0 <= self.selected_game_index < len(self.found_exe_list)
         )
-        has_archive = bool(getattr(self, "opti_source_archive", ""))
         has_supported_gpu = self._selected_game_has_supported_gpu() if has_valid_game else True
         can_install = (
             self.sheet_status
             and not self.sheet_loading
             and not self.install_in_progress
             and has_valid_game
-            and has_archive
+            and self.optiscaler_archive_ready
+            and not self.optiscaler_archive_downloading
             and has_supported_gpu
             and getattr(self, "_game_popup_confirmed", False)
         )
@@ -849,6 +886,10 @@ class OptiManagerApp:
             self._task_executor.shutdown(wait=False, cancel_futures=True)
         except Exception:
             pass
+        try:
+            self._download_executor.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
         self.root.destroy()
 
     def _build_retry_session(self) -> requests.Session:
@@ -891,7 +932,9 @@ class OptiManagerApp:
         self.module_download_links = module_links if ok else {}
 
         self.sheet_status = ok
-        self._refresh_optiscaler_download_link_ui()
+        self._refresh_optiscaler_archive_info_ui()
+        if ok:
+            self._start_optiscaler_archive_prepare()
         self._update_install_button_state()
         self._update_sheet_status()
         # --- 최신 버전 확인 및 업그레이드 유도 ---
@@ -911,6 +954,78 @@ class OptiManagerApp:
                 else:
                     self._show_supported_games_popup()
             self._start_auto_scan()
+
+    def _get_optiscaler_archive_entry(self) -> dict:
+        entry = self.module_download_links.get("optiscaler", {}) if hasattr(self, "module_download_links") else {}
+        return entry if isinstance(entry, dict) else {}
+
+    def _get_expected_optiscaler_archive_name(self) -> str:
+        entry = self._get_optiscaler_archive_entry()
+        filename = str(entry.get("filename", "") or entry.get("version", "")).strip()
+        if filename:
+            return Path(filename).name
+
+        url = str(entry.get("url", "")).strip()
+        if not url:
+            return ""
+        parsed = urlparse(url)
+        return Path(parsed.path).name
+
+    def _start_optiscaler_archive_prepare(self):
+        entry = self._get_optiscaler_archive_entry()
+        url = str(entry.get("url", "")).strip()
+        filename = self._get_expected_optiscaler_archive_name()
+        self.optiscaler_archive_filename = filename
+
+        if not url or not filename:
+            self.optiscaler_archive_ready = False
+            self.optiscaler_archive_downloading = False
+            self.optiscaler_archive_error = "Missing archive metadata in sheet."
+            self.opti_source_archive = ""
+            self._update_install_button_state()
+            return
+
+        cache_path = self.optiscaler_cache_dir / filename
+        self.opti_source_archive = str(cache_path)
+        if cache_path.exists():
+            self.optiscaler_archive_ready = True
+            self.optiscaler_archive_downloading = False
+            self.optiscaler_archive_error = ""
+            self._update_install_button_state()
+            return
+
+        self.optiscaler_archive_ready = False
+        self.optiscaler_archive_downloading = True
+        self.optiscaler_archive_error = ""
+        self._update_install_button_state()
+        self._download_executor.submit(self._download_optiscaler_archive_worker, url, str(cache_path), filename)
+
+    def _download_optiscaler_archive_worker(self, url: str, dest_path: str, archive_name: str):
+        try:
+            installer_services.download_to_file(url, dest_path, timeout=300)
+            self.root.after(
+                0,
+                lambda path=dest_path, name=archive_name: self._on_optiscaler_archive_ready(path, name, None),
+            )
+        except Exception as exc:
+            self.root.after(
+                0,
+                lambda err=str(exc): self._on_optiscaler_archive_ready("", archive_name, err),
+            )
+
+    def _on_optiscaler_archive_ready(self, archive_path: str, archive_name: str, error_message: Optional[str]):
+        self.optiscaler_archive_filename = archive_name
+        self.optiscaler_archive_downloading = False
+        if error_message:
+            self.optiscaler_archive_ready = False
+            self.optiscaler_archive_error = error_message
+            self.opti_source_archive = ""
+        else:
+            self.optiscaler_archive_ready = True
+            self.optiscaler_archive_error = ""
+            self.opti_source_archive = archive_path
+
+        self._update_install_button_state()
 
     def check_app_update(self):
         """Check for app update using loaded module_download_links. Runs on UI thread after sheet load."""
@@ -1227,7 +1342,7 @@ class OptiManagerApp:
             text_color="#C5CFDB",
             anchor="w",
         )
-        self.gpu_lbl.grid(row=0, column=0, sticky="w")
+        self.gpu_lbl.grid(row=0, column=0, padx=(1, 0), sticky="w")
 
         # Badge-style status indicator
         self.status_badge = ctk.CTkLabel(
@@ -1250,6 +1365,7 @@ class OptiManagerApp:
         row = ctk.CTkFrame(self.root, fg_color=_SURFACE, corner_radius=0)
         row.grid(row=1, column=0, sticky="ew", padx=0, pady=0)
         row.grid_columnconfigure(1, weight=1)
+        self.scan_row = row
 
         sec_lbl = ctk.CTkLabel(
             row,
@@ -1280,7 +1396,8 @@ class OptiManagerApp:
             text_color="#AEB9C8",
             anchor="w",
         )
-        self.lbl_game_path.grid(row=0, column=2, padx=(6, 20), pady=12, sticky="ew")
+        self.lbl_game_path.place(x=0, rely=0.5, anchor="w")
+        self.root.after(0, self._align_supported_games_count_label)
 
     # -- Grid area (poster cards) -----------------------------------------
 
@@ -1296,7 +1413,7 @@ class OptiManagerApp:
             font=ctk.CTkFont(family=FONT_HEADING, size=12, weight="bold"),
             text_color="#F1F5F9",
         )
-        sec_lbl.grid(row=0, column=0, padx=20, pady=(12, 6), sticky="w")
+        sec_lbl.grid(row=0, column=0, padx=20, pady=(6, 6), sticky="w")
 
         self.games_scroll = ctk.CTkScrollableFrame(
             wrapper,
@@ -1334,7 +1451,7 @@ class OptiManagerApp:
     # -- Bottom bar --------------------------------------------------------
 
     def _build_bottom_bar(self):
-        bar = ctk.CTkFrame(self.root, fg_color=_SURFACE, corner_radius=0, height=168)
+        bar = ctk.CTkFrame(self.root, fg_color=_SURFACE, corner_radius=0, height=142)
         bar.grid(row=3, column=0, sticky="ew", padx=0, pady=0)
         bar.grid_propagate(False)
         bar.grid_columnconfigure(0, weight=1)
@@ -1346,7 +1463,7 @@ class OptiManagerApp:
 
         sec_lbl = ctk.CTkLabel(
             title_line,
-            text="3. Select OptiScaler Archive",
+            text="3. Install Information",
             font=ctk.CTkFont(family=FONT_HEADING, size=12, weight="bold"),
             text_color="#F1F5F9",
         )
@@ -1361,59 +1478,11 @@ class OptiManagerApp:
             justify="right",
             wraplength=520,
         )
-        self.lbl_optiscaler_version_line.grid(row=0, column=1, padx=(10, 0), sticky="e")
-
-        mid_top = ctk.CTkFrame(bar, fg_color=_SURFACE, corner_radius=0)
-        mid_top.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 2))
-        mid_top.grid_columnconfigure(2, weight=1)
+        self.lbl_optiscaler_version_line.grid(row=0, column=1, padx=(10, 0), pady=(2, 0), sticky="e")
 
         mid_bottom = ctk.CTkFrame(bar, fg_color=_SURFACE, corner_radius=0)
-        mid_bottom.grid(row=2, column=0, sticky="ew", padx=20, pady=(0, 10))
+        mid_bottom.grid(row=1, column=0, sticky="ew", padx=20, pady=(4, 10))
         mid_bottom.grid_columnconfigure(0, weight=1)
-
-        btn_font = ctk.CTkFont(family=FONT_UI, size=11, weight="bold")
-        btn_text_width = tkfont.Font(family=FONT_UI, size=11, weight="bold").measure("Select Archive")
-
-        self.btn_select_archive = ctk.CTkButton(
-            mid_top,
-            text="Select Archive",
-            width=btn_text_width + 4,
-            height=32,
-            corner_radius=8,
-            fg_color="#465160",
-            hover_color="#596576",
-            text_color=_ACCENT,
-            font=btn_font,
-            command=self.select_opti_source_archive,
-        )
-        self.btn_select_archive.grid(row=0, column=0, padx=(0, 10), pady=4)
-
-        self.optiscaler_link_block = ctk.CTkFrame(mid_top, fg_color="transparent", corner_radius=0)
-        self.optiscaler_link_block.grid(row=0, column=1, padx=(30, 10), pady=(0, 0), sticky="w")
-        self.optiscaler_link_block.grid_columnconfigure(0, weight=1)
-
-        self.lbl_optiscaler_link_title = ctk.CTkLabel(
-            self.optiscaler_link_block,
-            text="",
-            font=ctk.CTkFont(family=FONT_UI, size=11, weight="bold"),
-            text_color="#7FA3C9",
-            cursor="hand2",
-            anchor="w",
-            justify="left",
-        )
-        self.lbl_optiscaler_link_title.grid(row=0, column=0, padx=0, pady=(0, 0), sticky="w")
-        self.lbl_optiscaler_link_title.bind("<Button-1>", self._open_optiscaler_download_link)
-        self.lbl_optiscaler_link_title.bind("<Enter>", self._on_optiscaler_link_enter)
-        self.lbl_optiscaler_link_title.bind("<Leave>", self._on_optiscaler_link_leave)
-
-        self.lbl_opti_path = ctk.CTkLabel(
-            mid_top,
-            text="",
-            font=ctk.CTkFont(family=FONT_UI, size=11),
-            text_color="#AEB9C8",
-            anchor="w",
-        )
-        self.lbl_opti_path.grid(row=0, column=2, sticky="ew", padx=(0, 10))
 
         self.apply_btn = ctk.CTkButton(
             mid_bottom,
@@ -1444,64 +1513,37 @@ class OptiManagerApp:
         self.info_text.grid(row=0, column=0, sticky="ew", pady=(0, 0))
         self._apply_information_text_shift()
 
-        self._refresh_optiscaler_download_link_ui()
+        self._refresh_optiscaler_archive_info_ui()
         self._set_information_text("Select a game to view information.")
         self._update_install_button_state()
+        self.root.after(0, self._align_supported_games_count_label)
 
-    def _refresh_optiscaler_download_link_ui(self):
-        if not hasattr(self, "lbl_optiscaler_link_title"):
-            return
-
+    def _refresh_optiscaler_archive_info_ui(self):
         # Do not show placeholder version text before sheet load completes.
         if getattr(self, "sheet_loading", False):
-            self.lbl_optiscaler_link_title.configure(text="", cursor="arrow")
             if hasattr(self, "lbl_optiscaler_version_line"):
                 self.lbl_optiscaler_version_line.configure(text="")
             return
 
         entry = self.module_download_links.get("optiscaler", {}) if hasattr(self, "module_download_links") else {}
-        self._optiscaler_download_url = ""
+        archive_name = ""
 
         if isinstance(entry, dict):
-            self._optiscaler_download_url = str(entry.get("url", "")).strip()
+            archive_name = str(entry.get("filename", "") or entry.get("version", "")).strip()
             raw_version = str(entry.get("version", "")).replace("\r", " ").replace("\n", " ").strip()
             version = re.sub(r"\s+", " ", raw_version)
         else:
             version = ""
 
-        version_text = f"Latest Version: {version}" if version else "Latest Version: -"
-
-        if self._optiscaler_download_url:
-            self.lbl_optiscaler_link_title.configure(
-                text="OptiScaler Download Link",
-                text_color=_LINK_ACTIVE,
-                cursor="hand2",
-            )
-            if hasattr(self, "lbl_optiscaler_version_line"):
-                self.lbl_optiscaler_version_line.configure(text=version_text, text_color="#AEB9C8")
+        if archive_name:
+            version_text = f"Install Version: {archive_name}"
+        elif version:
+            version_text = f"Install Version: {version}"
         else:
-            self.lbl_optiscaler_link_title.configure(
-                text="OptiScaler Download Link",
-                text_color="#7FA3C9",
-                cursor="arrow",
-            )
-            if hasattr(self, "lbl_optiscaler_version_line"):
-                self.lbl_optiscaler_version_line.configure(text=version_text, text_color="#7F8B99")
+            version_text = "Install Version: -"
 
-    def _open_optiscaler_download_link(self, _event=None):
-        url = getattr(self, "_optiscaler_download_url", "")
-        if url:
-            webbrowser.open(url)
-
-    def _on_optiscaler_link_enter(self, _event=None):
-        if getattr(self, "_optiscaler_download_url", ""):
-            self.lbl_optiscaler_link_title.configure(text_color=_LINK_HOVER)
-
-    def _on_optiscaler_link_leave(self, _event=None):
-        if getattr(self, "_optiscaler_download_url", ""):
-            self.lbl_optiscaler_link_title.configure(text_color=_LINK_ACTIVE)
-        else:
-            self.lbl_optiscaler_link_title.configure(text_color="#7FA3C9")
+        if hasattr(self, "lbl_optiscaler_version_line"):
+            self.lbl_optiscaler_version_line.configure(text=version_text, text_color="#AEB9C8")
 
     def _apply_information_text_shift(self):
         # Keep inner spacing tight; avoid moving the inner widget itself to preserve border/glow rendering.
@@ -1531,6 +1573,7 @@ class OptiManagerApp:
                 text_color="#FFCB62",
                 fg_color="#4B4330",
             )
+            self.root.after(0, self._align_supported_games_count_label)
             return
         if self.sheet_status:
             self.status_badge.configure(
@@ -1544,6 +1587,7 @@ class OptiManagerApp:
                 text_color="#FF8A8A",
                 fg_color="#4A2F34",
             )
+        self.root.after(0, self._align_supported_games_count_label)
 
     # ------------------------------------------------------------------
     # Information text
@@ -2371,14 +2415,6 @@ class OptiManagerApp:
     # File dialogs
     # ------------------------------------------------------------------
 
-    def select_opti_source_archive(self):
-        path = filedialog.askopenfilename(filetypes=[("Archives", "*.zip *.7z"), ("All files", "*")])
-        if not path:
-            return
-        self.opti_source_archive = path
-        self.lbl_opti_path.configure(text="OptiScaler Selected", text_color="#F1F5F9")
-        self._update_install_button_state()
-
     def select_game_folder(self):
         if self.sheet_loading:
             messagebox.showinfo("Game DB Loading", "Game DB is still loading. Please wait a moment.")
@@ -2473,9 +2509,10 @@ class OptiManagerApp:
         self.btn_select_folder.configure(state="normal")
         count = len(self.found_exe_list)
         self.lbl_game_path.configure(
-            text=f"Detected Games: {count}",
+            text=f"Supported Games: {count}",
             text_color="#F1F5F9",
         )
+        self.root.after(0, self._align_supported_games_count_label)
         if count > 0:
             self._set_information_text("Select a game to view information.")
         elif not is_auto:
@@ -2510,9 +2547,10 @@ class OptiManagerApp:
         self._schedule_games_scrollregion_refresh()
 
         self.lbl_game_path.configure(
-            text=f"Detected Games: {len(self.found_exe_list)}",
+            text=f"Supported Games: {len(self.found_exe_list)}",
             text_color="#F1F5F9",
         )
+        self.root.after(0, self._align_supported_games_count_label)
 
     # ------------------------------------------------------------------
     # Install
@@ -2568,8 +2606,13 @@ class OptiManagerApp:
             messagebox.showwarning("Warning", "Please select a game card to install.")
             return
 
-        if not getattr(self, "opti_source_archive", None):
-            messagebox.showwarning("Warning", "Please select the OptiScaler archive (.zip/.7z).")
+        if self.optiscaler_archive_downloading:
+            messagebox.showinfo("Preparing Archive", "OptiScaler archive download is still in progress. Please wait.")
+            return
+
+        if not self.optiscaler_archive_ready or not getattr(self, "opti_source_archive", None):
+            detail = self.optiscaler_archive_error or "OptiScaler archive is not ready yet."
+            messagebox.showwarning("Warning", detail)
             return
 
         if self.selected_game_index < 0 or self.selected_game_index >= len(self.found_exe_list):
@@ -2597,6 +2640,8 @@ class OptiManagerApp:
         target_path = game_data["path"]
         logger = get_game_logger(game_data.get("game_name", "unknown"))
         try:
+            exclude_raw = str(self.module_download_links.get("__exclude_list__", "")).strip()
+            exclude_patterns = [token.strip() for token in exclude_raw.split("|") if token.strip()]
             with tempfile.TemporaryDirectory() as tmpdir:
                 installer_services.extract_archive(source_archive, tmpdir)
                 contents = os.listdir(tmpdir)
@@ -2604,7 +2649,12 @@ class OptiManagerApp:
                     actual_source = os.path.join(tmpdir, contents[0])
                 else:
                     actual_source = tmpdir
-                installer_services.install_from_source_folder(actual_source, target_path, dll_name=game_data.get("dll_name", ""))
+                installer_services.install_from_source_folder(
+                    actual_source,
+                    target_path,
+                    dll_name=game_data.get("dll_name", ""),
+                    exclude_patterns=exclude_patterns,
+                )
                 logger.info(f"Extracted and installed files to {target_path}")
 
             module_key = str(game_data.get("module_dl", "")).strip().lower()
@@ -2763,8 +2813,3 @@ if __name__ == "__main__":
     root = ctk.CTk()
     app = OptiManagerApp(root)
     root.mainloop()
-
-
-
-
-

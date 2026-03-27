@@ -1,3 +1,4 @@
+import fnmatch
 import logging
 import os
 import shutil
@@ -7,23 +8,12 @@ import zipfile
 from pathlib import Path
 from urllib.parse import urlparse
 
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+from network_utils import build_retry_session
 
 
 OPTISCALER_DLL = "OptiScaler.dll"
 
-_file_session = requests.Session()
-_file_retry_strategy = Retry(
-    total=3,
-    backoff_factor=1,
-    status_forcelist=(429, 500, 502, 503, 504),
-    allowed_methods=("GET", "HEAD"),
-)
-_file_adapter = HTTPAdapter(max_retries=_file_retry_strategy)
-_file_session.mount("https://", _file_adapter)
-_file_session.mount("http://", _file_adapter)
+_file_session = build_retry_session()
 
 
 def _subprocess_no_window_kwargs() -> dict:
@@ -38,15 +28,61 @@ def _subprocess_no_window_kwargs() -> dict:
     return kwargs
 
 
-def install_from_source_folder(source_folder, target_path, dll_name=""):
+def _normalize_rel_path(rel_path: str) -> str:
+    normalized = str(rel_path or "").replace("\\", "/").strip()
+    if normalized in {"", "."}:
+        return ""
+    return normalized.strip("/")
+
+
+def _should_exclude_rel_path(rel_path: str, patterns: list[str]) -> bool:
+    normalized_rel_path = _normalize_rel_path(rel_path)
+    if not normalized_rel_path:
+        return False
+
+    basename = os.path.basename(normalized_rel_path)
+    for pattern in patterns:
+        normalized_pattern = _normalize_rel_path(pattern)
+        if not normalized_pattern:
+            continue
+        if "/" in normalized_pattern:
+            if fnmatch.fnmatch(normalized_rel_path, normalized_pattern):
+                return True
+            if normalized_pattern.endswith("/*"):
+                dir_prefix = normalized_pattern[:-2].strip("/")
+                if dir_prefix and (normalized_rel_path == dir_prefix or normalized_rel_path.startswith(dir_prefix + "/")):
+                    return True
+        else:
+            if fnmatch.fnmatch(basename, normalized_pattern):
+                return True
+            if fnmatch.fnmatch(normalized_rel_path, normalized_pattern):
+                return True
+    return False
+
+
+def install_from_source_folder(source_folder, target_path, dll_name="", exclude_patterns=None):
     if not os.path.isdir(source_folder):
         raise ValueError(f"Invalid source folder: {source_folder}")
 
-    for dirpath, _, filenames in os.walk(source_folder):
+    patterns = [str(p).strip() for p in (exclude_patterns or []) if str(p).strip()]
+
+    for dirpath, dirnames, filenames in os.walk(source_folder):
         rel_dir = os.path.relpath(dirpath, source_folder)
+        rel_dir_norm = _normalize_rel_path(rel_dir)
+        dirnames[:] = [
+            dirname
+            for dirname in dirnames
+            if not _should_exclude_rel_path(
+                f"{rel_dir_norm}/{dirname}" if rel_dir_norm else dirname,
+                patterns,
+            )
+        ]
         dest_dir = target_path if rel_dir == "." else os.path.join(target_path, rel_dir)
         os.makedirs(dest_dir, exist_ok=True)
         for fname in filenames:
+            rel_file_path = f"{rel_dir_norm}/{fname}" if rel_dir_norm else fname
+            if _should_exclude_rel_path(rel_file_path, patterns):
+                continue
             src = os.path.join(dirpath, fname)
             dst = os.path.join(dest_dir, fname)
             shutil.copy2(src, dst)
