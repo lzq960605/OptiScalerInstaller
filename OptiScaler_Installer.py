@@ -275,9 +275,7 @@ PLACEHOLDER_FG = "#9fb0c5"
 LOCAL_APPDATA_DIR = Path(os.environ.get("LOCALAPPDATA") or Path(tempfile.gettempdir()))
 APP_CACHE_DIR = LOCAL_APPDATA_DIR / "OptiScalerInstaller"
 OPTISCALER_CACHE_DIR = APP_CACHE_DIR / "cache" / "optiscaler"
-APP_UPDATE_CACHE_DIR = APP_CACHE_DIR / "cache" / "updates"
-# Store poster cache in system temp to avoid writing beside the executable.
-POSTER_CACHE_DIR = Path(tempfile.gettempdir()) / "OptiScalerInstaller" / "posters"
+POSTER_CACHE_DIR = APP_CACHE_DIR / "cache" / "posters"
 APP_BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 ASSETS_DIR = APP_BASE_DIR / "assets"
 DEFAULT_POSTER_CANDIDATES = [
@@ -293,7 +291,10 @@ HI_DPI_SCALE = 2
 TARGET_POSTER_W = CARD_W * HI_DPI_SCALE
 TARGET_POSTER_H = CARD_H * HI_DPI_SCALE
 INFO_TEXT_OFFSET_PX = 10
-ENABLE_POSTER_CACHE = os.environ.get("OPTISCALER_ENABLE_POSTER_CACHE", "0").strip().lower() in {"1", "true", "yes", "on"}
+POSTER_CACHE_VERSION = 1
+ENABLE_POSTER_CACHE = os.environ.get("OPTISCALER_ENABLE_POSTER_CACHE", "1").strip().lower() in {"1", "true", "yes", "on"}
+POSTER_CACHE_MAX_FILES = int(os.environ.get("OPTISCALER_POSTER_CACHE_MAX_FILES", "500"))
+POSTER_CACHE_MAX_AGE_DAYS = int(os.environ.get("OPTISCALER_POSTER_CACHE_MAX_AGE_DAYS", "45"))
 IMAGE_CACHE_MAX = int(os.environ.get("OPTISCALER_IMAGE_CACHE_MAX", "100"))
 
 
@@ -467,8 +468,6 @@ class OptiManagerApp:
         self.opti_source_archive = ""
         self.optiscaler_cache_dir = OPTISCALER_CACHE_DIR
         self.optiscaler_cache_dir.mkdir(parents=True, exist_ok=True)
-        self.app_update_cache_dir = APP_UPDATE_CACHE_DIR
-        self.app_update_cache_dir.mkdir(parents=True, exist_ok=True)
         self.optiscaler_archive_ready = False
         self.optiscaler_archive_downloading = False
         self.optiscaler_archive_error = ""
@@ -509,6 +508,11 @@ class OptiManagerApp:
         self._task_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="general-task")
         self._download_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="archive-download")
         self._app_update_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="app-update")
+        if ENABLE_POSTER_CACHE:
+            try:
+                self._task_executor.submit(self._maintain_poster_cache)
+            except Exception:
+                logging.exception("Failed to submit poster cache maintenance task")
         self._pending_image_jobs: dict = {}
         self._inflight_image_futures: dict = {}
         self._failed_image_jobs: dict = {}
@@ -1142,10 +1146,12 @@ class OptiManagerApp:
             )
             return False
 
-        safe_version = re.sub(r"[^0-9A-Za-z._-]+", "_", latest_version).strip("._-") or "latest"
-        cache_name = f"{safe_version}_{source_name}" if source_name else f"{safe_version}_installer_update{source_ext or '.bin'}"
-        cache_path = self.app_update_cache_dir / cache_name
         runtime_dir = _get_runtime_install_dir()
+        if source_ext == ".exe":
+            target_name = _build_expected_installer_exe_name(latest_version, download_url) or source_name
+        else:
+            target_name = source_name or "OptiScaler_Installer_update.zip"
+        download_path = runtime_dir / Path(target_name).name
 
         self.app_update_in_progress = True
         self._update_install_button_state()
@@ -1154,7 +1160,7 @@ class OptiManagerApp:
             self._app_update_worker,
             latest_version,
             download_url,
-            str(cache_path),
+            str(download_path),
             str(runtime_dir),
         )
         return True
@@ -1168,12 +1174,12 @@ class OptiManagerApp:
         )
         return bool(messagebox.askyesno(title, detail))
 
-    def _app_update_worker(self, latest_version: str, download_url: str, cache_path: str, runtime_dir: str):
+    def _app_update_worker(self, latest_version: str, download_url: str, download_path: str, runtime_dir: str):
         try:
-            archive_path = Path(cache_path)
+            payload_path = Path(download_path)
             target_dir = Path(runtime_dir)
-            installer_services.download_to_file(download_url, str(archive_path), timeout=300)
-            launch_path = self._prepare_app_update_payload(archive_path, target_dir, latest_version)
+            installer_services.download_to_file(download_url, str(payload_path), timeout=300)
+            launch_path = self._prepare_app_update_payload(payload_path, target_dir, latest_version)
             self.root.after(
                 0,
                 lambda path=str(launch_path), version=latest_version: self._on_app_update_ready(path, version, None),
@@ -1190,11 +1196,17 @@ class OptiManagerApp:
         expected_exe_name = _build_expected_installer_exe_name(latest_version, str(payload_path))
 
         if payload_ext == ".exe":
-            target_name = expected_exe_name or payload_path.name
-            target_path = target_dir / target_name
-            shutil.copy2(payload_path, target_path)
-            logging.info("[APP] Copied updated installer executable to %s", target_path)
-            return target_path
+            if expected_exe_name and payload_path.name.lower() != expected_exe_name.lower():
+                renamed_target = payload_path.with_name(expected_exe_name)
+                if renamed_target.exists():
+                    try:
+                        renamed_target.unlink()
+                    except Exception:
+                        logging.debug("Failed to remove existing installer payload before rename: %s", renamed_target, exc_info=True)
+                payload_path.replace(renamed_target)
+                payload_path = renamed_target
+            logging.info("[APP] Downloaded updated installer executable to %s", payload_path)
+            return payload_path
 
         if payload_ext != ".zip":
             raise ValueError(f"Unsupported installer update payload: {payload_path}")
@@ -1208,34 +1220,40 @@ class OptiManagerApp:
                 if member_name.lower().endswith(".exe"):
                     exe_members.append(member_name)
 
-        installer_services.extract_archive(str(payload_path), str(target_dir))
-        launch_candidates: list[Path] = []
-        for member_name in exe_members:
-            candidate = _resolve_safe_child_path(target_dir, member_name)
-            if candidate and candidate.exists():
-                launch_candidates.append(candidate)
+        try:
+            installer_services.extract_archive(str(payload_path), str(target_dir))
+            launch_candidates: list[Path] = []
+            for member_name in exe_members:
+                candidate = _resolve_safe_child_path(target_dir, member_name)
+                if candidate and candidate.exists():
+                    launch_candidates.append(candidate)
 
-        if expected_exe_name:
-            for candidate in launch_candidates:
-                if candidate.name.lower() == expected_exe_name.lower():
-                    logging.info("[APP] Prepared updated installer from zip: %s", candidate)
-                    return candidate
+            if expected_exe_name:
+                for candidate in launch_candidates:
+                    if candidate.name.lower() == expected_exe_name.lower():
+                        logging.info("[APP] Prepared updated installer from zip: %s", candidate)
+                        return candidate
 
-            direct_expected = target_dir / expected_exe_name
-            if direct_expected.exists():
-                logging.info("[APP] Prepared updated installer from zip: %s", direct_expected)
-                return direct_expected
+                direct_expected = target_dir / expected_exe_name
+                if direct_expected.exists():
+                    logging.info("[APP] Prepared updated installer from zip: %s", direct_expected)
+                    return direct_expected
 
-        if len(launch_candidates) == 1:
-            logging.info("[APP] Prepared updated installer from zip: %s", launch_candidates[0])
-            return launch_candidates[0]
+            if len(launch_candidates) == 1:
+                logging.info("[APP] Prepared updated installer from zip: %s", launch_candidates[0])
+                return launch_candidates[0]
 
-        if not launch_candidates:
-            raise FileNotFoundError(f"No installer executable found in update zip: {payload_path}")
+            if not launch_candidates:
+                raise FileNotFoundError(f"No installer executable found in update zip: {payload_path}")
 
-        raise RuntimeError(
-            "Multiple installer executables were extracted from update zip and no unique target could be selected."
-        )
+            raise RuntimeError(
+                "Multiple installer executables were extracted from update zip and no unique target could be selected."
+            )
+        finally:
+            try:
+                payload_path.unlink(missing_ok=True)
+            except Exception:
+                logging.debug("Failed to remove installer update zip after extraction: %s", payload_path, exc_info=True)
 
     def _launch_updated_installer(self, launch_path: str, latest_version: str):
         target = Path(launch_path)
@@ -2404,6 +2422,9 @@ class OptiManagerApp:
 
         return None
 
+    def _poster_cache_file_prefix(self) -> str:
+        return f"v{POSTER_CACHE_VERSION}_{TARGET_POSTER_W}x{TARGET_POSTER_H}_"
+
     def _poster_cache_key(self, title: str, url: str) -> str:
         normalized_url = ""
         if url:
@@ -2416,12 +2437,52 @@ class OptiManagerApp:
         source = normalized_url or (title or "").strip().lower()
         if not source:
             source = "unknown"
-        return hashlib.sha256(source.encode("utf-8")).hexdigest()
+        cache_source = f"poster|v{POSTER_CACHE_VERSION}|{TARGET_POSTER_W}x{TARGET_POSTER_H}|{source}"
+        return hashlib.sha256(cache_source.encode("utf-8")).hexdigest()
 
     def _poster_cache_path(self, title: str, url: str) -> Path:
         key = self._poster_cache_key(title, url)
         # Store processed poster in a stable format/path regardless of source URL extension.
-        return self._poster_cache_dir / f"{key}.png"
+        return self._poster_cache_dir / f"{self._poster_cache_file_prefix()}{key}.png"
+
+    def _remove_poster_cache_file(self, cache_path: Path):
+        try:
+            cache_path.unlink(missing_ok=True)
+        except Exception:
+            logging.debug("Failed to remove poster cache file: %s", cache_path, exc_info=True)
+
+    def _maintain_poster_cache(self):
+        if not ENABLE_POSTER_CACHE:
+            return
+
+        try:
+            self._poster_cache_dir.mkdir(parents=True, exist_ok=True)
+            prefix = self._poster_cache_file_prefix()
+            now = time.time()
+            max_age_seconds = max(0, POSTER_CACHE_MAX_AGE_DAYS) * 86400
+            retained_files: list[tuple[float, Path]] = []
+
+            for cache_path in self._poster_cache_dir.glob("*.png"):
+                try:
+                    stat_result = cache_path.stat()
+                except Exception:
+                    logging.debug("Failed to stat poster cache file: %s", cache_path, exc_info=True)
+                    continue
+
+                is_legacy_schema = not cache_path.name.startswith(prefix)
+                is_expired = max_age_seconds > 0 and (now - stat_result.st_mtime) > max_age_seconds
+                if is_legacy_schema or is_expired:
+                    self._remove_poster_cache_file(cache_path)
+                    continue
+
+                retained_files.append((stat_result.st_mtime, cache_path))
+
+            if POSTER_CACHE_MAX_FILES > 0 and len(retained_files) > POSTER_CACHE_MAX_FILES:
+                retained_files.sort(key=lambda item: item[0], reverse=True)
+                for _, stale_path in retained_files[POSTER_CACHE_MAX_FILES:]:
+                    self._remove_poster_cache_file(stale_path)
+        except Exception:
+            logging.exception("Failed to maintain poster cache")
 
     def _queue_card_image_fetch(self, index: int, label: ctk.CTkLabel, title: str, game_name: str, url: str):
         self._pending_image_jobs[index] = {
@@ -2538,11 +2599,13 @@ class OptiManagerApp:
     def _load_poster_image_worker(self, title: str, game_name: str, url: str) -> tuple[Image.Image, bool]:
         local_cover_path = self._find_local_cover_asset(game_name)
         if local_cover_path is not None:
-            local_cache_key = f"local::{str(local_cover_path).lower()}"
-            if ENABLE_POSTER_CACHE and local_cache_key in self._image_cache:
-                return self._image_cache[local_cache_key], False
+            local_cache_key = f"local::v{POSTER_CACHE_VERSION}::{TARGET_POSTER_W}x{TARGET_POSTER_H}::{str(local_cover_path).lower()}"
+            cached_local = self._image_cache_get(local_cache_key) if ENABLE_POSTER_CACHE else None
+            if cached_local is not None:
+                return cached_local, False
             try:
-                pil_img = _prepare_cover_image(Image.open(local_cover_path), TARGET_POSTER_W, TARGET_POSTER_H)
+                with Image.open(local_cover_path) as local_img:
+                    pil_img = _prepare_cover_image(local_img, TARGET_POSTER_W, TARGET_POSTER_H)
                 if ENABLE_POSTER_CACHE:
                     self._image_cache_put(local_cache_key, pil_img)
                 return pil_img, False
@@ -2550,17 +2613,20 @@ class OptiManagerApp:
                 logging.warning("Failed to load local cover image from %s: %s", local_cover_path, exc)
 
         cache_key = self._poster_cache_key(title, url)
-        if ENABLE_POSTER_CACHE and cache_key in self._image_cache:
-            return self._image_cache[cache_key], False
+        cached_image = self._image_cache_get(cache_key) if ENABLE_POSTER_CACHE else None
+        if cached_image is not None:
+            return cached_image, False
 
         cache_path = self._poster_cache_path(title, url)
         if ENABLE_POSTER_CACHE and cache_path.exists():
             try:
-                pil_img = Image.open(cache_path).convert("RGBA")
+                with Image.open(cache_path) as cached_img:
+                    pil_img = cached_img.convert("RGBA")
                 self._image_cache_put(cache_key, pil_img)
                 return pil_img, False
             except Exception:
                 logging.warning("Failed to decode cached poster: %s", cache_path)
+                self._remove_poster_cache_file(cache_path)
 
         if not url:
             fallback = self._default_poster_base.copy().convert("RGBA")
@@ -2570,7 +2636,8 @@ class OptiManagerApp:
             with self._image_session.get(url, timeout=IMAGE_TIMEOUT_SECONDS, stream=True) as response:
                 response.raise_for_status()
                 data = b"".join(response.iter_content(chunk_size=65536))
-            pil_img = _prepare_cover_image(Image.open(io.BytesIO(data)), TARGET_POSTER_W, TARGET_POSTER_H)
+            with Image.open(io.BytesIO(data)) as downloaded_img:
+                pil_img = _prepare_cover_image(downloaded_img, TARGET_POSTER_W, TARGET_POSTER_H)
 
             if ENABLE_POSTER_CACHE:
                 try:
@@ -2592,8 +2659,22 @@ class OptiManagerApp:
             return
         self._set_card_base_image(index, label, pil_img)
 
+    def _image_cache_get(self, key: str) -> Optional[Image.Image]:
+        try:
+            pil_img = self._image_cache.get(key)
+            if pil_img is None:
+                return None
+            # Refresh insertion order so frequently viewed posters stay cached longer.
+            self._image_cache.pop(key, None)
+            self._image_cache[key] = pil_img
+            return pil_img
+        except Exception:
+            logging.exception("Failed to read image cache for key=%s", key)
+            return None
+
     def _image_cache_put(self, key: str, pil_img: Image.Image):
         try:
+            self._image_cache.pop(key, None)
             self._image_cache[key] = pil_img
             # Evict oldest entries when exceeding cap. Use dict insertion order (Py3.7+).
             if len(self._image_cache) > IMAGE_CACHE_MAX:
