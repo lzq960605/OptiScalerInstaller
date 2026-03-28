@@ -995,8 +995,6 @@ class OptiManagerApp:
         else:
             logging.error("[APP] Failed to load Game DB: %s", err)
         self._refresh_optiscaler_archive_info_ui()
-        if ok:
-            self._start_optiscaler_archive_prepare()
         self._update_install_button_state()
         self._update_sheet_status()
         update_started = self.check_app_update() if ok else False
@@ -1104,6 +1102,8 @@ class OptiManagerApp:
 
         if not ok:
             return
+
+        self._start_optiscaler_archive_prepare()
 
         warning_key = "__warning_kr__" if USE_KOREAN else "__warning_en__"
         warning_text = str(self.module_download_links.get(warning_key, "")).strip()

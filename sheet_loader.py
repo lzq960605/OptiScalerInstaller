@@ -269,8 +269,23 @@ def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
 
 def load_module_download_links_from_public_sheet(spreadsheet_id, gid=518993268):
     url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=csv&gid={gid}"
-    response = _file_session.get(url, timeout=15)
-    response.raise_for_status()
+    max_attempts = 3
+    backoff_base = 1.0
+    response = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = _file_session.get(url, timeout=15)
+            response.raise_for_status()
+            break
+        except Exception:
+            if attempt < max_attempts:
+                sleep_for = backoff_base * (2 ** (attempt - 1))
+                try:
+                    time.sleep(sleep_for)
+                except Exception:
+                    pass
+            else:
+                raise
 
     reader = csv.reader(io.StringIO(response.content.decode("utf-8-sig"), newline=""))
     headers = next(reader, None)
