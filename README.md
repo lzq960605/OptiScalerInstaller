@@ -4,6 +4,7 @@
 
 <p align="center">
   <b>Simple and automated installer for OptiScaler.</b><br>
+  <b>Install and Play game! No need to set up OptiScaler option (Like Plug and Play)</b><br>
 </p>
 
 &nbsp;
@@ -32,7 +33,7 @@
 
 <p>🔍 <b>Auto Game Scan:</b> Automatically detects Steam library folders.</p>
 
-<p>🛠️ <b>One-Click Install:</b> Installs OptiScaler files and optimized <code>OptiScaler.ini</code> settings automatically.</p>
+<p>🛠️ <b>One-Click Install:</b> Installs OptiScaler files and **pre-configured & tested game specific <code>OptiScaler.ini</code> settings** automatically.</p>
 
 <p>🚀 <b>Advanced Patches:</b> Automatic installation of additional modules (OptiPatcher, Unreal5 G/I bug fix) for selected games.</p>
 
