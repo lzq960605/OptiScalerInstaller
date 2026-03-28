@@ -57,7 +57,7 @@ except ModuleNotFoundError as e:
     ) from e
 
  # Application Version
-APP_VERSION = "0.1.1"
+APP_VERSION = "0.1.2"
 
  # Configure logging deterministically below (avoid calling basicConfig early)
 
@@ -141,6 +141,7 @@ def _init_file_logger() -> Optional[Path]:
             fh.setLevel(logging.INFO)
             fh.setFormatter(formatter)
             root_logger.addHandler(fh)
+            get_prefixed_logger("APP").info("OptiScaler Installer version %s", APP_VERSION)
             get_prefixed_logger("APP").info("File logging initialized at %s", log_path)
             return log_path
         except Exception as e:
@@ -274,6 +275,7 @@ PLACEHOLDER_FG = "#9fb0c5"
 LOCAL_APPDATA_DIR = Path(os.environ.get("LOCALAPPDATA") or Path(tempfile.gettempdir()))
 APP_CACHE_DIR = LOCAL_APPDATA_DIR / "OptiScalerInstaller"
 OPTISCALER_CACHE_DIR = APP_CACHE_DIR / "cache" / "optiscaler"
+APP_UPDATE_CACHE_DIR = APP_CACHE_DIR / "cache" / "updates"
 # Store poster cache in system temp to avoid writing beside the executable.
 POSTER_CACHE_DIR = Path(tempfile.gettempdir()) / "OptiScalerInstaller" / "posters"
 APP_BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
@@ -293,6 +295,52 @@ TARGET_POSTER_H = CARD_H * HI_DPI_SCALE
 INFO_TEXT_OFFSET_PX = 10
 ENABLE_POSTER_CACHE = os.environ.get("OPTISCALER_ENABLE_POSTER_CACHE", "0").strip().lower() in {"1", "true", "yes", "on"}
 IMAGE_CACHE_MAX = int(os.environ.get("OPTISCALER_IMAGE_CACHE_MAX", "100"))
+
+
+def _parse_version_tuple(verstr: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in re.findall(r"\d+", str(verstr or "")))
+
+
+def _get_runtime_launch_path() -> Path:
+    try:
+        if getattr(sys, "frozen", False) and hasattr(sys, "executable"):
+            return Path(sys.executable).resolve()
+    except Exception:
+        pass
+    return Path(__file__).resolve()
+
+
+def _get_runtime_install_dir() -> Path:
+    return _get_runtime_launch_path().parent
+
+
+def _build_expected_installer_exe_name(version_text: str, fallback_url: str = "") -> str:
+    normalized = re.sub(r"\s+", "", str(version_text or ""))
+    if normalized.lower().endswith(".exe"):
+        return Path(normalized).name
+    if normalized.lower().startswith("v"):
+        normalized = normalized[1:]
+    if normalized:
+        return f"OptiScaler_Installer_v{normalized}.exe"
+
+    fallback_name = Path(urlparse(str(fallback_url or "")).path).name
+    if fallback_name.lower().endswith(".exe"):
+        return fallback_name
+    return ""
+
+
+def _resolve_safe_child_path(base_dir: Path, child_path: str) -> Optional[Path]:
+    raw_name = str(child_path or "").replace("\\", "/").strip()
+    if not raw_name:
+        return None
+
+    try:
+        resolved_base = base_dir.resolve(strict=False)
+        resolved_child = (resolved_base / Path(raw_name)).resolve(strict=False)
+        resolved_child.relative_to(resolved_base)
+        return resolved_child
+    except Exception:
+        return None
 
 
 def _make_default_poster_base(width: int, height: int) -> Image.Image:
@@ -419,10 +467,14 @@ class OptiManagerApp:
         self.opti_source_archive = ""
         self.optiscaler_cache_dir = OPTISCALER_CACHE_DIR
         self.optiscaler_cache_dir.mkdir(parents=True, exist_ok=True)
+        self.app_update_cache_dir = APP_UPDATE_CACHE_DIR
+        self.app_update_cache_dir.mkdir(parents=True, exist_ok=True)
         self.optiscaler_archive_ready = False
         self.optiscaler_archive_downloading = False
         self.optiscaler_archive_error = ""
         self.optiscaler_archive_filename = ""
+        self.app_update_in_progress = False
+        self._post_sheet_startup_done = False
         self.found_exe_list = []
         self.game_db = {}
         self.module_download_links = {}
@@ -456,6 +508,7 @@ class OptiManagerApp:
         self._image_executor = ThreadPoolExecutor(max_workers=IMAGE_MAX_WORKERS, thread_name_prefix="cover-loader")
         self._task_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="general-task")
         self._download_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="archive-download")
+        self._app_update_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="app-update")
         self._pending_image_jobs: dict = {}
         self._inflight_image_futures: dict = {}
         self._failed_image_jobs: dict = {}
@@ -831,6 +884,7 @@ class OptiManagerApp:
             self.sheet_status
             and not self.sheet_loading
             and not self.install_in_progress
+            and not self.app_update_in_progress
             and has_valid_game
             and not self.install_precheck_running
             and self.install_precheck_ok
@@ -884,6 +938,10 @@ class OptiManagerApp:
             pass
         try:
             self._download_executor.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+        try:
+            self._app_update_executor.shutdown(wait=False, cancel_futures=True)
         except Exception:
             pass
         self.root.destroy()
@@ -941,23 +999,9 @@ class OptiManagerApp:
             self._start_optiscaler_archive_prepare()
         self._update_install_button_state()
         self._update_sheet_status()
-        # --- 최신 버전 확인 및 업그레이드 유도 ---
-        self.check_app_update()
-
-        # --- 게임 자동 스캔 트리거 ---
-        if ok:
-            warning_key = "__warning_kr__" if USE_KOREAN else "__warning_en__"
-            warning_text = str(self.module_download_links.get(warning_key, "")).strip()
-            if not self._supported_games_popup_shown:
-                self._supported_games_popup_shown = True
-                if warning_text:
-                    self._show_startup_warning_popup(
-                        warning_text,
-                        on_close=self._show_supported_games_popup,
-                    )
-                else:
-                    self._show_supported_games_popup()
-            self._start_auto_scan()
+        update_started = self.check_app_update() if ok else False
+        if not update_started:
+            self._run_post_sheet_startup(ok)
 
     def _get_optiscaler_archive_entry(self) -> dict:
         entry = self.module_download_links.get("optiscaler", {}) if hasattr(self, "module_download_links") else {}
@@ -1043,31 +1087,202 @@ class OptiManagerApp:
 
         self._update_install_button_state()
 
-    def check_app_update(self):
-        """Check for app update using loaded module_download_links. Runs on UI thread after sheet load."""
-        try:
-            latest_info = None
-            for k, v in (self.module_download_links or {}).items():
-                if k == "latest_installer_version" and isinstance(v, dict):
-                    latest_info = v
-                    break
-            if latest_info:
-                def parse_version(verstr):
-                    return tuple(int(x) for x in str(verstr).strip().split(".") if x.isdigit())
-                app_ver = parse_version(APP_VERSION)
-                sheet_ver = parse_version(latest_info.get("version", ""))
-                if sheet_ver and app_ver and app_ver < sheet_ver:
-                    upgrade_url = latest_info.get("url") or latest_info.get("link")
-                    if upgrade_url:
-                        webbrowser.open_new(upgrade_url)
-        except Exception as e:
-            logging.warning("[APP] Version check failed: %s", e)
+    def _get_installer_update_entry(self) -> dict:
+        entry = self.module_download_links.get("latest_installer_dl", {}) if hasattr(self, "module_download_links") else {}
+        return entry if isinstance(entry, dict) else {}
 
-        # 시트 로드 성공 이후 RTSS 설정 체크 진행 (기본 메시지 fallback)
+    def _run_post_sheet_startup(self, ok: bool):
+        if self._post_sheet_startup_done:
+            return
+
+        self._post_sheet_startup_done = True
+
         logger = None
         if getattr(self, "found_exe_list", None) and self.selected_game_index is not None:
             logger = get_prefixed_logger(self.found_exe_list[self.selected_game_index].get("game_name", "unknown"))
         self._check_and_show_rtss_popup(logger=logger)
+
+        if not ok:
+            return
+
+        warning_key = "__warning_kr__" if USE_KOREAN else "__warning_en__"
+        warning_text = str(self.module_download_links.get(warning_key, "")).strip()
+        if not self._supported_games_popup_shown:
+            self._supported_games_popup_shown = True
+            if warning_text:
+                self._show_startup_warning_popup(
+                    warning_text,
+                    on_close=self._show_supported_games_popup,
+                )
+            else:
+                self._show_supported_games_popup()
+        self._start_auto_scan()
+
+    def _start_app_update(self, latest_info: dict) -> bool:
+        if self.app_update_in_progress:
+            return True
+
+        latest_version = str(latest_info.get("version", "")).strip()
+        download_url = str(latest_info.get("url") or latest_info.get("link") or "").strip()
+        if not latest_version or not download_url:
+            logging.warning(
+                "[APP] Skipping installer update: missing latest_installer_dl metadata (version=%r, url=%r)",
+                latest_version,
+                download_url,
+            )
+            return False
+
+        source_name = Path(urlparse(download_url).path).name
+        source_ext = Path(source_name).suffix.lower()
+        if source_ext not in {".zip", ".exe"}:
+            logging.warning(
+                "[APP] Skipping installer update: unsupported asset type %r from %s",
+                source_ext or "<none>",
+                download_url,
+            )
+            return False
+
+        safe_version = re.sub(r"[^0-9A-Za-z._-]+", "_", latest_version).strip("._-") or "latest"
+        cache_name = f"{safe_version}_{source_name}" if source_name else f"{safe_version}_installer_update{source_ext or '.bin'}"
+        cache_path = self.app_update_cache_dir / cache_name
+        runtime_dir = _get_runtime_install_dir()
+
+        self.app_update_in_progress = True
+        self._update_install_button_state()
+        logging.info("[APP] Starting installer self-update to version %s from %s", latest_version, download_url)
+        self._app_update_executor.submit(
+            self._app_update_worker,
+            latest_version,
+            download_url,
+            str(cache_path),
+            str(runtime_dir),
+        )
+        return True
+
+    def _confirm_app_update(self, latest_version: str) -> bool:
+        title = "업데이트 확인" if USE_KOREAN else "Update Available"
+        detail = (
+            f"최신 버전(v{latest_version})이 있습니다.\n지금 업데이트하시겠습니까?"
+            if USE_KOREAN
+            else f"A newer version (v{latest_version}) is available.\nDo you want to update now?"
+        )
+        return bool(messagebox.askyesno(title, detail))
+
+    def _app_update_worker(self, latest_version: str, download_url: str, cache_path: str, runtime_dir: str):
+        try:
+            archive_path = Path(cache_path)
+            target_dir = Path(runtime_dir)
+            installer_services.download_to_file(download_url, str(archive_path), timeout=300)
+            launch_path = self._prepare_app_update_payload(archive_path, target_dir, latest_version)
+            self.root.after(
+                0,
+                lambda path=str(launch_path), version=latest_version: self._on_app_update_ready(path, version, None),
+            )
+        except Exception as exc:
+            logging.exception("[APP] Installer self-update failed")
+            self.root.after(
+                0,
+                lambda err=str(exc), version=latest_version: self._on_app_update_ready("", version, err),
+            )
+
+    def _prepare_app_update_payload(self, payload_path: Path, target_dir: Path, latest_version: str) -> Path:
+        payload_ext = payload_path.suffix.lower()
+        expected_exe_name = _build_expected_installer_exe_name(latest_version, str(payload_path))
+
+        if payload_ext == ".exe":
+            target_name = expected_exe_name or payload_path.name
+            target_path = target_dir / target_name
+            shutil.copy2(payload_path, target_path)
+            logging.info("[APP] Copied updated installer executable to %s", target_path)
+            return target_path
+
+        if payload_ext != ".zip":
+            raise ValueError(f"Unsupported installer update payload: {payload_path}")
+
+        exe_members: list[str] = []
+        with zipfile.ZipFile(payload_path, "r") as archive:
+            for member in archive.infolist():
+                if member.is_dir():
+                    continue
+                member_name = str(member.filename).replace("\\", "/").strip()
+                if member_name.lower().endswith(".exe"):
+                    exe_members.append(member_name)
+
+        installer_services.extract_archive(str(payload_path), str(target_dir))
+        launch_candidates: list[Path] = []
+        for member_name in exe_members:
+            candidate = _resolve_safe_child_path(target_dir, member_name)
+            if candidate and candidate.exists():
+                launch_candidates.append(candidate)
+
+        if expected_exe_name:
+            for candidate in launch_candidates:
+                if candidate.name.lower() == expected_exe_name.lower():
+                    logging.info("[APP] Prepared updated installer from zip: %s", candidate)
+                    return candidate
+
+            direct_expected = target_dir / expected_exe_name
+            if direct_expected.exists():
+                logging.info("[APP] Prepared updated installer from zip: %s", direct_expected)
+                return direct_expected
+
+        if len(launch_candidates) == 1:
+            logging.info("[APP] Prepared updated installer from zip: %s", launch_candidates[0])
+            return launch_candidates[0]
+
+        if not launch_candidates:
+            raise FileNotFoundError(f"No installer executable found in update zip: {payload_path}")
+
+        raise RuntimeError(
+            "Multiple installer executables were extracted from update zip and no unique target could be selected."
+        )
+
+    def _launch_updated_installer(self, launch_path: str, latest_version: str):
+        target = Path(launch_path)
+        if not target.exists():
+            raise FileNotFoundError(f"Updated installer not found: {target}")
+
+        logging.info("[APP] Launching updated installer v%s from %s", latest_version, target)
+        subprocess.Popen(
+            [str(target)],
+            cwd=str(target.parent),
+            **_subprocess_no_window_kwargs(),
+        )
+
+    def _on_app_update_ready(self, launch_path: str, latest_version: str, error_message: Optional[str]):
+        self.app_update_in_progress = False
+        self._update_install_button_state()
+
+        if error_message:
+            logging.error("[APP] Installer update to v%s failed: %s", latest_version, error_message)
+            self._run_post_sheet_startup(True)
+            return
+
+        try:
+            self._launch_updated_installer(launch_path, latest_version)
+        except Exception as exc:
+            logging.exception("[APP] Failed to launch updated installer")
+            logging.error("[APP] Updated installer launch failed for v%s: %s", latest_version, exc)
+            self._run_post_sheet_startup(True)
+            return
+
+        self.root.after(50, self._on_close)
+
+    def check_app_update(self) -> bool:
+        """Check for app update using latest_installer_dl from module_download_links."""
+        try:
+            latest_info = self._get_installer_update_entry()
+            if latest_info:
+                app_ver = _parse_version_tuple(APP_VERSION)
+                sheet_ver = _parse_version_tuple(latest_info.get("version", ""))
+                if sheet_ver and app_ver and app_ver < sheet_ver:
+                    if not self._confirm_app_update(str(latest_info.get("version", "")).strip()):
+                        logging.info("[APP] User declined installer update to v%s", latest_info.get("version", ""))
+                        return False
+                    return self._start_app_update(latest_info)
+        except Exception as e:
+            logging.warning("[APP] Version check failed: %s", e)
+        return False
 
     def _show_startup_warning_popup(self, warning_text: str, on_close=None):
         text = str(warning_text or "").strip()
