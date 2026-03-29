@@ -794,8 +794,8 @@ class OptiManagerApp:
                 popup.update_idletasks()
                 _sync_selection_popup_text_height()
 
-                popup_w = popup.winfo_reqwidth()
-                popup_h = popup.winfo_reqheight()
+                popup_w = max(1, int(popup.winfo_reqwidth()))
+                popup_h = max(1, int(popup.winfo_reqheight()))
                 screen_w = max(1, int(self.root.winfo_screenwidth() or popup_w))
                 screen_h = max(1, int(self.root.winfo_screenheight() or popup_h))
                 margin = 12
@@ -817,7 +817,9 @@ class OptiManagerApp:
                 max_y = max(min_y, screen_h - popup_h - margin)
                 x = max(min_x, min(x, max_x))
                 y = max(min_y, min(y, max_y))
-                popup.geometry(f"{popup_w}x{popup_h}+{x}+{y}")
+                logical_w = max(1, int(round(popup._reverse_window_scaling(popup_w))))
+                logical_h = max(1, int(round(popup._reverse_window_scaling(popup_h))))
+                popup.geometry(f"{logical_w}x{logical_h}+{x}+{y}")
             except Exception:
                 logging.debug("Failed to size selection popup", exc_info=True)
 
