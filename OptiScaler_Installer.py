@@ -672,7 +672,7 @@ class OptiManagerApp:
             text_color="#000000",
             font=ctk.CTkFont(family=FONT_UI, size=12, weight="bold"),
             command=_confirm,
-        ).pack(pady=(4, 0))
+        ).pack(pady=(10, 0))
 
         def _sync_selection_popup_text_height():
             try:
