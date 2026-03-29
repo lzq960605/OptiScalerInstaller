@@ -1833,10 +1833,7 @@ class OptiManagerApp:
             max_y = max(min_y, screen_h - popup_h - margin)
             x = max(min_x, min(x, max_x))
             y = max(min_y, min(y, max_y))
-            if use_requested_size:
-                popup.geometry(f"{popup_w}x{popup_h}+{x}+{y}")
-            else:
-                popup.geometry(f"+{x}+{y}")
+            popup.geometry(f"+{x}+{y}")
         except Exception:
             logging.debug("Failed to center popup on root window")
 
