@@ -199,12 +199,12 @@ def resolve_proxy_dll_name(target_path, preferred_name="", logger=None) -> str:
         candidate_path = target_dir / candidate
         if not candidate_path.exists():
             if logger:
-                logger.info("Selected proxy DLL name for OptiScaler: %s", candidate)
+                logger.info("OptiScaler DLL name: %s", candidate)
             return candidate
         if _is_optiscaler_managed_proxy_dll(candidate_path):
             if logger:
                 logger.info(
-                    "Selected proxy DLL name for OptiScaler after planned backup of existing OptiScaler DLL: %s",
+                    "OptiScaler DLL name after planned backup of existing OptiScaler DLL: %s",
                     candidate,
                 )
             return candidate
