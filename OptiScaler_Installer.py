@@ -537,7 +537,7 @@ class OptiManagerApp:
         popup.withdraw()
 
         container = ctk.CTkFrame(popup, fg_color="transparent")
-        container.pack(fill="both", expand=True, padx=22, pady=(18, 6))
+        container.pack(fill="both", padx=22, pady=(18, 8))
 
         text_widget = tk.Text(
             container,
@@ -573,7 +573,7 @@ class OptiManagerApp:
         else:
             text_widget.insert("end", message_text)
 
-        text_widget.pack(anchor="w", fill="x")
+        text_widget.pack(anchor="w", fill="x", pady=(0, 6))
 
         preferred_text_chars = 72
         screen_w = max(1, int(self.root.winfo_screenwidth() or WINDOW_W))
@@ -615,7 +615,7 @@ class OptiManagerApp:
                 on_confirm()
 
         ctk.CTkButton(
-            popup,
+            container,
             text="확인" if USE_KOREAN else "OK",
             width=100,
             height=34,
@@ -625,7 +625,7 @@ class OptiManagerApp:
             text_color="#000000",
             font=ctk.CTkFont(family=FONT_UI, size=12, weight="bold"),
             command=_confirm,
-        ).pack(pady=(0, 8))
+        ).pack(pady=(0, 0))
 
         popup.protocol("WM_DELETE_WINDOW", lambda: None)  # Block closing without confirm
         self._center_popup_on_root(popup, use_requested_size=True)
