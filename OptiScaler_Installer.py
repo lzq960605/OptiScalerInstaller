@@ -1904,14 +1904,14 @@ class OptiManagerApp:
         self.lbl_optiscaler_version_line.grid(row=0, column=1, padx=(10, 0), pady=(2, 0), sticky="e")
 
         mid_bottom = ctk.CTkFrame(bar, fg_color=_SURFACE, corner_radius=0)
-        mid_bottom.grid(row=1, column=0, sticky="ew", padx=20, pady=(7, 10))
+        mid_bottom.grid(row=1, column=0, sticky="ew", padx=20, pady=(2, 0))
         mid_bottom.grid_columnconfigure(0, weight=1)
 
         self.apply_btn = ctk.CTkButton(
             mid_bottom,
             text="Install",
             width=104,
-            height=72,
+            height=87,
             corner_radius=10,
             fg_color=_ACCENT_DISABLED,
             hover_color=_ACCENT_HOVER,
@@ -1924,7 +1924,7 @@ class OptiManagerApp:
 
         self.info_text = ctk.CTkTextbox(
             mid_bottom,
-            height=72,
+            height=87,
             corner_radius=8,
             fg_color="#2A303A",
             text_color="#E3EAF3",
