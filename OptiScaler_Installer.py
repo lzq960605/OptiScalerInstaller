@@ -724,6 +724,7 @@ class OptiManagerApp:
         screen_w = max(1, int(self.root.winfo_screenwidth() or WINDOW_W))
         screen_h = max(1, int(self.root.winfo_screenheight() or WINDOW_H))
         avg_char_width = max(7, int(normal_font.measure("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz") / 52))
+        zero_char_width = max(7, int(normal_font.measure("0")))
         max_text_chars = max(preferred_text_chars, min(110, max(58, (screen_w - 140) // avg_char_width)))
         max_popup_h = max(240, screen_h - 80)
         width_steps = list(range(preferred_text_chars, max_text_chars + 1, 4))
@@ -740,7 +741,7 @@ class OptiManagerApp:
             resolved_line_count = _estimate_wrapped_text_lines(
                 plain_message_text,
                 normal_font,
-                max(32, int(text_widget.winfo_width() or 0)),
+                max(32, zero_char_width * width_chars),
             )
             text_widget.configure(height=resolved_line_count)
             popup.update_idletasks()
@@ -772,10 +773,26 @@ class OptiManagerApp:
             command=_confirm,
         ).pack(pady=(0, 0))
 
+        def _sync_selection_popup_text_height():
+            try:
+                popup.update_idletasks()
+                actual_width_px = max(32, int(text_widget.winfo_width() or (zero_char_width * chosen_width)))
+                actual_line_count = _estimate_wrapped_text_lines(
+                    plain_message_text,
+                    normal_font,
+                    actual_width_px,
+                )
+                if int(text_widget.cget("height")) != actual_line_count:
+                    text_widget.configure(height=actual_line_count)
+                    popup.update_idletasks()
+            except Exception:
+                logging.debug("Failed to reflow selection popup text", exc_info=True)
+
         def _apply_selection_popup_geometry():
             try:
                 self.root.update_idletasks()
                 popup.update_idletasks()
+                _sync_selection_popup_text_height()
 
                 popup_w = popup.winfo_reqwidth()
                 popup_h = popup.winfo_reqheight()
@@ -805,8 +822,8 @@ class OptiManagerApp:
                 logging.debug("Failed to size selection popup", exc_info=True)
 
         popup.protocol("WM_DELETE_WINDOW", lambda: None)  # Block closing without confirm
-        _apply_selection_popup_geometry()
         popup.deiconify()
+        _apply_selection_popup_geometry()
         popup.after(0, _apply_selection_popup_geometry)
         popup.after(80, _apply_selection_popup_geometry)
 
