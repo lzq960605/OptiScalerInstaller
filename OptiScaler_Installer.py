@@ -243,19 +243,21 @@ def get_graphics_adapter_snapshot() -> tuple[list[str], int, str]:
             "radeon",
             "geforce", "rtx", "gtx", "quadro", "tesla",
         )
-        filtered_names_raw = []
         filtered_names_unique = []
+        seen_filtered_names = set()
         for name in gpu_names_raw:
             lowered = name.lower()
             if "mirage driver" in lowered:
                 continue
             if any(keyword in lowered for keyword in allowed_vendor_keywords):
-                filtered_names_raw.append(name)
-                if name not in filtered_names_unique:
+                normalized_name = " ".join(lowered.split())
+                if normalized_name not in seen_filtered_names:
+                    seen_filtered_names.add(normalized_name)
                     filtered_names_unique.append(name)
 
-        if filtered_names_raw:
-            return filtered_names_unique, len(filtered_names_raw), ", ".join(filtered_names_unique)
+        if filtered_names_unique:
+            # Only treat distinct GPU names as multi-GPU so duplicate WMI rows do not block installation.
+            return filtered_names_unique, len(filtered_names_unique), ", ".join(filtered_names_unique)
     except Exception:
         pass
 
@@ -761,10 +763,9 @@ class OptiManagerApp:
             text = "듀얼 GPU는 지원되지 않습니다." if USE_KOREAN else "Dual GPU is not supported."
             self.lbl_game_path.configure(text=text, text_color="#FF8A8A")
             self.root.after(0, self._align_supported_games_count_label)
+        self._clear_cards()
         if hasattr(self, "info_text") and self.info_text:
             self._set_information_text(self._get_multi_gpu_block_message())
-
-        self._clear_cards()
         self._update_selected_game_header()
         self._update_sheet_status()
         self._update_install_button_state()
