@@ -481,9 +481,7 @@ _ACCENT_HOVER = "#35B6E0"
 _ACCENT_SUCCESS = "#7EE1AA"
 _LINK_ACTIVE = "#7DD3FC"
 _LINK_HOVER = "#38BDF8"
-_SELECTED_BORDER = "#4CC9F0"
 _CARD_BG = "#181B21"
-_CARD_BG_SEL = "#33506B"
 _SURFACE = "#2A2E35"
 _PANEL = "#1E2128"
 _ACCENT_DISABLED = "#3A414C"
@@ -2372,28 +2370,6 @@ class OptiManagerApp:
         cols = self._get_dynamic_column_count()
         self._fit_cards_to_visible_width(cols)
 
-    def _make_card_view_image(self, base_pil: Image.Image, selected: bool) -> Image.Image:
-        img = base_pil.convert("RGBA")
-
-        # When no game is selected, keep all covers crisp.
-        if self.selected_game_index is None:
-            return img
-
-        if selected:
-            zoom = 1.06
-            zw = max(1, int(TARGET_POSTER_W * zoom))
-            zh = max(1, int(TARGET_POSTER_H * zoom))
-            zoomed = img.resize((zw, zh), Image.LANCZOS)
-            left = max(0, (zw - TARGET_POSTER_W) // 2)
-            top = max(0, (zh - TARGET_POSTER_H) // 2)
-            img = zoomed.crop((left, top, left + TARGET_POSTER_W, top + TARGET_POSTER_H))
-        else:
-            # Keep focus effect but avoid making non-selected cards look overly blurry.
-            img = img.filter(ImageFilter.GaussianBlur(0.35))
-            img = ImageEnhance.Brightness(img).enhance(0.9)
-
-        return img
-
     def _ensure_card_image_cache(self, item: dict):
         base_revision = int(item.get("base_revision", 0))
         if item.get("ctk_img_cache_revision") == base_revision and item.get("ctk_img_cache"):
@@ -2401,13 +2377,9 @@ class OptiManagerApp:
 
         base_pil = item["base_pil"]
         normal_img = base_pil.convert("RGBA")
-        selected_img = self._make_card_view_image(base_pil, selected=True)
-        dimmed_img = self._make_card_view_image(base_pil, selected=False)
 
         ctk_cache = {
             "normal": ctk.CTkImage(light_image=normal_img, dark_image=normal_img, size=(CARD_W, CARD_H)),
-            "selected": ctk.CTkImage(light_image=selected_img, dark_image=selected_img, size=(CARD_W, CARD_H)),
-            "dimmed": ctk.CTkImage(light_image=dimmed_img, dark_image=dimmed_img, size=(CARD_W, CARD_H)),
         }
         # Keep explicit refs to prevent Tk image GC.
         self._ctk_images.extend(ctk_cache.values())
@@ -2424,12 +2396,7 @@ class OptiManagerApp:
         hovered = self._hovered_card_index == index
         title_overlay = item["hover_title"]
 
-        if selected:
-            item["card"].configure(border_color=_SELECTED_BORDER, fg_color=_CARD_BG_SEL, border_width=3)
-        elif hovered:
-            item["card"].configure(border_color=_ACCENT, fg_color=_CARD_BG_SEL, border_width=2)
-        else:
-            item["card"].configure(border_color=_CARD_BG, fg_color=_CARD_BG, border_width=2)
+        item["card"].configure(border_color=_CARD_BG, fg_color=_CARD_BG, border_width=2)
 
         if selected or hovered:
             title_overlay.place(x=0, y=CARD_H - 34)
@@ -2437,19 +2404,12 @@ class OptiManagerApp:
         else:
             title_overlay.place_forget()
 
-        if self.selected_game_index is None:
-            image_state = "normal"
-        elif selected:
-            image_state = "selected"
-        else:
-            image_state = "dimmed"
-
         self._ensure_card_image_cache(item)
-        if item.get("current_image_state") == image_state:
+        if item.get("current_image_state") == "normal":
             return
 
-        item["img_label"].configure(image=item["ctk_img_cache"][image_state])
-        item["current_image_state"] = image_state
+        item["img_label"].configure(image=item["ctk_img_cache"]["normal"])
+        item["current_image_state"] = "normal"
 
     def _refresh_all_card_visuals(self):
         for i in range(len(self.card_items)):
