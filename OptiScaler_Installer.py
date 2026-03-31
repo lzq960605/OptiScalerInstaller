@@ -661,6 +661,17 @@ class OptiManagerApp:
                 break
 
         text_widget.configure(width=chosen_width, height=resolved_line_count, state="disabled")
+        popup.update_idletasks()
+        actual_width_px = max(32, int(text_widget.winfo_width() or text_widget.winfo_reqwidth() or (zero_char_width * chosen_width)))
+        actual_line_count = _estimate_wrapped_text_lines(
+            plain_message_text,
+            normal_font,
+            actual_width_px,
+        )
+        if actual_line_count != resolved_line_count:
+            resolved_line_count = actual_line_count
+            text_widget.configure(height=resolved_line_count)
+            popup.update_idletasks()
 
         def _confirm():
             try:
@@ -669,7 +680,7 @@ class OptiManagerApp:
                 pass
             popup.destroy()
             if on_confirm:
-                on_confirm()
+                self.root.after_idle(on_confirm)
 
         ctk.CTkButton(
             container,
@@ -684,29 +695,17 @@ class OptiManagerApp:
             command=_confirm,
         ).pack(pady=(10, 0))
 
-        def _sync_selection_popup_text_height():
-            try:
-                popup.update_idletasks()
-                actual_width_px = max(32, int(text_widget.winfo_width() or (zero_char_width * chosen_width)))
-                actual_line_count = _estimate_wrapped_text_lines(
-                    plain_message_text,
-                    normal_font,
-                    actual_width_px,
-                )
-                if int(text_widget.cget("height")) != actual_line_count:
-                    text_widget.configure(height=actual_line_count)
-                    popup.update_idletasks()
-            except Exception:
-                logging.debug("Failed to reflow selection popup text", exc_info=True)
-
-        def _apply_selection_popup_geometry():
+        def _apply_selection_popup_geometry(use_requested_size: bool = False):
             try:
                 self.root.update_idletasks()
                 popup.update_idletasks()
-                _sync_selection_popup_text_height()
 
-                popup_w = max(1, int(popup.winfo_reqwidth()))
-                popup_h = max(1, int(popup.winfo_reqheight()))
+                if use_requested_size:
+                    popup_w = max(1, int(popup.winfo_reqwidth()))
+                    popup_h = max(1, int(popup.winfo_reqheight()))
+                else:
+                    popup_w = max(1, int(popup.winfo_width() or popup.winfo_reqwidth()))
+                    popup_h = max(1, int(popup.winfo_height() or popup.winfo_reqheight()))
                 screen_w = max(1, int(self.root.winfo_screenwidth() or popup_w))
                 screen_h = max(1, int(self.root.winfo_screenheight() or popup_h))
                 margin = 12
@@ -735,10 +734,14 @@ class OptiManagerApp:
                 logging.debug("Failed to size selection popup", exc_info=True)
 
         popup.protocol("WM_DELETE_WINDOW", lambda: None)  # Block closing without confirm
+        _apply_selection_popup_geometry(use_requested_size=True)
         popup.deiconify()
-        _apply_selection_popup_geometry()
-        popup.after(0, _apply_selection_popup_geometry)
-        popup.after(80, _apply_selection_popup_geometry)
+        popup.lift()
+        try:
+            popup.focus_force()
+        except Exception:
+            pass
+        popup.after_idle(_apply_selection_popup_geometry)
 
     def _fetch_gpu_info_async(self):
         try:
@@ -1737,6 +1740,11 @@ class OptiManagerApp:
         if not names:
             return
 
+        self.root.update_idletasks()
+        screen_h = max(1, int(self.root.winfo_screenheight() or WINDOW_H))
+        root_h = max(1, int(self.root.winfo_height() or WINDOW_H))
+        max_popup_h = min(max(260, root_h - 4), max(260, screen_h - 16))
+
         popup = ctk.CTkToplevel(self.root)
         popup.title("Supported Game List")
         popup.transient(self.root)
@@ -1744,31 +1752,60 @@ class OptiManagerApp:
         popup.resizable(False, False)
         popup.configure(fg_color=_SURFACE)
         popup.withdraw()
-        popup.geometry("388x592")
-        popup.minsize(352, 492)
 
-        list_frame = ctk.CTkScrollableFrame(
-            popup,
-            corner_radius=8,
-            fg_color="#2A303A",
-            border_width=0,
-        )
-        list_frame.pack(fill="both", expand=True, padx=18, pady=(0, 12))
+        container = ctk.CTkFrame(popup, width=0, height=0, fg_color="transparent")
+        container.pack(fill="both", padx=18, pady=(16, 14))
+
+        list_font = ctk.CTkFont(family=FONT_UI, size=12)
+        metrics_font = tkfont.Font(family=FONT_UI, size=12)
+        row_height = max(20, int(metrics_font.metrics("linespace")) + 6)
+        desired_list_h = max(72, (len(names) * row_height) + 18)
+        popup_chrome_h = 88
+        max_list_h = max(120, max_popup_h - popup_chrome_h)
+        use_scroll = desired_list_h > max_list_h
+
+        if use_scroll:
+            list_frame = ctk.CTkScrollableFrame(
+                container,
+                width=344,
+                height=max_list_h,
+                corner_radius=8,
+                fg_color="#2A303A",
+                border_width=0,
+            )
+            list_frame.pack(fill="both", expand=True, pady=(0, 12))
+        else:
+            list_frame = ctk.CTkFrame(
+                container,
+                width=344,
+                height=desired_list_h,
+                corner_radius=8,
+                fg_color="#2A303A",
+                border_width=0,
+            )
+            list_frame.pack(fill="x", pady=(0, 12))
         list_frame.grid_columnconfigure(0, weight=1)
 
         for i, name in enumerate(names):
             ctk.CTkLabel(
                 list_frame,
                 text=f"- {name}",
-                font=ctk.CTkFont(family=FONT_UI, size=12),
+                font=list_font,
                 text_color="#E3EAF3",
                 anchor="w",
                 justify="left",
                 height=16,
             ).grid(row=i, column=0, sticky="ew", padx=10, pady=0)
 
+        def _close_popup():
+            try:
+                popup.grab_release()
+            except Exception:
+                pass
+            popup.destroy()
+
         ctk.CTkButton(
-            popup,
+            container,
             text="OK",
             width=100,
             height=34,
@@ -1777,17 +1814,40 @@ class OptiManagerApp:
             hover_color=_ACCENT_HOVER,
             text_color="#000000",
             font=ctk.CTkFont(family=FONT_UI, size=12, weight="bold"),
-            command=popup.destroy,
-        ).pack(pady=(0, 14))
+            command=_close_popup,
+        ).pack()
 
-        def _apply_supported_games_popup_geometry():
+        popup.update_idletasks()
+        if use_scroll:
+            list_req_h = max(1, int(list_frame.winfo_reqheight() or max_list_h))
+            chrome_h = max(72, int(popup.winfo_reqheight() or 0) - list_req_h)
+            target_list_h = max(120, min(max_list_h, max_popup_h - chrome_h))
+            list_frame.configure(height=target_list_h)
+            popup.update_idletasks()
+            current_popup_h = max(1, int(popup.winfo_reqheight() or 0))
+            slack_h = max(0, max_popup_h - current_popup_h)
+            if slack_h > 0:
+                grown_list_h = min(desired_list_h, target_list_h + slack_h)
+                if grown_list_h > target_list_h:
+                    list_frame.configure(height=grown_list_h)
+                    popup.update_idletasks()
+                    target_list_h = grown_list_h
+            overflow_h = max(0, int(popup.winfo_reqheight() or 0) - max_popup_h)
+            if overflow_h > 0:
+                list_frame.configure(height=max(120, target_list_h - overflow_h))
+                popup.update_idletasks()
+
+        def _apply_supported_games_popup_geometry(use_requested_size: bool = False):
             try:
                 self.root.update_idletasks()
                 popup.update_idletasks()
 
-                popup_w = max(1, int(popup.winfo_width() or popup.winfo_reqwidth() or 388))
-                popup_h = max(1, int(popup.winfo_height() or popup.winfo_reqheight() or 592))
-
+                if use_requested_size:
+                    popup_w = max(1, int(popup.winfo_reqwidth()))
+                    popup_h = max(1, int(popup.winfo_reqheight()))
+                else:
+                    popup_w = max(1, int(popup.winfo_width() or popup.winfo_reqwidth()))
+                    popup_h = max(1, int(popup.winfo_height() or popup.winfo_reqheight()))
                 screen_w = max(1, int(self.root.winfo_screenwidth() or popup_w))
                 screen_h = max(1, int(self.root.winfo_screenheight() or popup_h))
                 margin = 12
@@ -1795,22 +1855,30 @@ class OptiManagerApp:
                 root_x = self.root.winfo_x()
                 root_y = self.root.winfo_y()
                 root_w = self.root.winfo_width()
+                root_h = self.root.winfo_height()
                 x = root_x + (root_w // 2) - (popup_w // 2)
-                y = root_y
+                y = root_y + (root_h // 2) - (popup_h // 2)
                 min_x = margin if popup_w + (margin * 2) < screen_w else 0
                 min_y = margin if popup_h + (margin * 2) < screen_h else 0
                 max_x = max(min_x, screen_w - popup_w - margin)
                 max_y = max(min_y, screen_h - popup_h - margin)
                 x = max(min_x, min(x, max_x))
                 y = max(min_y, min(y, max_y))
-                popup.geometry(f"+{x}+{y}")
+                logical_w = max(1, int(round(popup._reverse_window_scaling(popup_w))))
+                logical_h = max(1, int(round(popup._reverse_window_scaling(popup_h))))
+                popup.geometry(f"{logical_w}x{logical_h}+{x}+{y}")
             except Exception:
                 logging.debug("Failed to size supported-games popup", exc_info=True)
 
+        popup.protocol("WM_DELETE_WINDOW", _close_popup)
+        _apply_supported_games_popup_geometry(use_requested_size=True)
         popup.deiconify()
-        _apply_supported_games_popup_geometry()
-        popup.after(0, _apply_supported_games_popup_geometry)
-        popup.after(80, _apply_supported_games_popup_geometry)
+        popup.lift()
+        try:
+            popup.focus_force()
+        except Exception:
+            pass
+        popup.after_idle(_apply_supported_games_popup_geometry)
 
     def _center_popup_on_root(self, popup: ctk.CTkToplevel, use_requested_size: bool = False):
         try:
@@ -3001,7 +3069,9 @@ class OptiManagerApp:
                 def _on_confirm():
                     self._game_popup_confirmed = True
                     self._update_install_button_state()
-                self._show_game_selection_popup(popup_msg, on_confirm=_on_confirm)
+                self.root.after_idle(
+                    lambda msg=popup_msg, cb=_on_confirm: self._show_game_selection_popup(msg, on_confirm=cb)
+                )
             else:
                 self._game_popup_confirmed = True
                 self._update_install_button_state()
@@ -3424,7 +3494,7 @@ class OptiManagerApp:
 
         if success:
             game = installed_game if isinstance(installed_game, dict) else {}
-            self._show_after_install_popup(game)
+            self.root.after_idle(lambda g=dict(game): self._show_after_install_popup(g))
         else:
             messagebox.showerror("Error", f"An error occurred during installation: {message}")
 
