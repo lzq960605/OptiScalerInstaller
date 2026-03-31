@@ -20,11 +20,34 @@ class GpuNoticeTheme:
     button_text_color: str = "#000000"
 
 
+@dataclass(frozen=True)
+class GpuVendorButtonTheme:
+    fg_color: str
+    hover_color: str
+    text_color: str
+
+
 UNSUPPORTED_GPU_POPUP_MIN_W = 420
 DUAL_GPU_BUTTON_W = 186
 DUAL_GPU_BUTTON_H = 66
 DUAL_GPU_BUTTON_GAP = 12
 GPU_POPUP_MARGIN = 12
+
+INTEL_BUTTON_THEME = GpuVendorButtonTheme(
+    fg_color="#0068B5",
+    hover_color="#005A9E",
+    text_color="#FFFFFF",
+)
+AMD_BUTTON_THEME = GpuVendorButtonTheme(
+    fg_color="#ED1C24",
+    hover_color="#C9141A",
+    text_color="#FFFFFF",
+)
+NVIDIA_BUTTON_THEME = GpuVendorButtonTheme(
+    fg_color="#76B900",
+    hover_color="#5F9500",
+    text_color="#111111",
+)
 
 
 def get_unsupported_gpu_title(use_korean: bool) -> str:
@@ -62,6 +85,21 @@ def _get_vendor_display_name(vendor: str) -> str:
     if normalized == "intel":
         return "Intel"
     return "Unknown"
+
+
+def _get_vendor_button_theme(vendor: str, theme: GpuNoticeTheme) -> GpuVendorButtonTheme:
+    normalized = str(vendor or "").strip().lower()
+    if normalized == "intel":
+        return INTEL_BUTTON_THEME
+    if normalized == "amd":
+        return AMD_BUTTON_THEME
+    if normalized == "nvidia":
+        return NVIDIA_BUTTON_THEME
+    return GpuVendorButtonTheme(
+        fg_color=theme.accent_color,
+        hover_color=theme.accent_hover_color,
+        text_color=theme.button_text_color,
+    )
 
 
 def _center_gpu_popup_on_root(
@@ -234,6 +272,7 @@ def select_dual_gpu_adapter(
         popup.destroy()
 
     for col_idx, adapter in enumerate(adapter_choices):
+        button_theme = _get_vendor_button_theme(getattr(adapter, "vendor", ""), theme)
         vendor_label = _get_vendor_display_name(getattr(adapter, "vendor", ""))
         model_label = str(getattr(adapter, "display_name", "") or getattr(adapter, "model_name", "") or "").strip()
         button_text = vendor_label if not model_label else f"{vendor_label}\n{model_label}"
@@ -243,9 +282,9 @@ def select_dual_gpu_adapter(
             width=DUAL_GPU_BUTTON_W,
             height=DUAL_GPU_BUTTON_H,
             corner_radius=10,
-            fg_color=theme.accent_color,
-            hover_color=theme.accent_hover_color,
-            text_color=theme.button_text_color,
+            fg_color=button_theme.fg_color,
+            hover_color=button_theme.hover_color,
+            text_color=button_theme.text_color,
             font=ctk.CTkFont(family=theme.font_ui, size=12, weight="bold"),
             command=lambda selected=adapter: _close_with_selection(selected),
         )
