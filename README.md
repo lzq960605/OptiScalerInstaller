@@ -4,6 +4,7 @@
 
 <p align="center">
   <b>Simple and automated installer for OptiScaler.</b><br>
+  <b>Install and Play game! No need to set up OptiScaler option (Like Plug and Play)</b><br>
 </p>
 
 &nbsp;
@@ -11,10 +12,7 @@
 ## 📋 Requirements
 ---
 * **Internet Connection:** Required to load the latest game DB from Google Sheets.
-* **OptiScaler Version:** `v0.9.0-pre11 (20260311)_RC4.5` or later.
-    > ⚠️ **IMPORTANT:** GitHub version (v0.7.9) is **NOT supported** (No XeFG, No XeMFG)
-    >
-    > Please download the latest from the **OptiScaler Discord**.
+* **OptiScaler Version:** The latest OptiScaler will be downloaded automatically.
 
 &nbsp;
 
@@ -30,13 +28,15 @@
 
 ## ✨ Key Features
 ---
-<p>✅ <b>Cloud-Sync Logic:</b> All configurations are loaded live from DB.</p>
+<p>✅ <b>Live Game DB Update:</b> Supported game list and pre-configured INI & options are loaded live from online DB.</p>
 
 <p>🔍 <b>Auto Game Scan:</b> Automatically detects Steam library folders.</p>
 
-<p>🛠️ <b>One-Click Install:</b> Installs OptiScaler files and optimized <code>OptiScaler.ini</code> settings automatically.</p>
+<p>🛠️ <b>One-Click Install:</b> Installs OptiScaler files and <b>pre-configured & tested game specific <code>OptiScaler.ini</code> settings</b> automatically.</p>
 
 <p>🚀 <b>Advanced Patches:</b> Automatic installation of additional modules (OptiPatcher, Unreal5 G/I bug fix) for selected games.</p>
+
+<p>🚀 <b>Advanced INI Edit:</b> Automatically edit Unreal Engine.ini & game INI for proper OptiScaler working for selected games.</p>
 
 <p>🔔 <b>Smart Guidance:</b> User notifications and RTSS option change guides to ensure the best performance.</p>
 
@@ -46,11 +46,9 @@
 ---
 1.  **Launch the App:** It will scan your Steam libraries. (Manual folder selection is also available).
 2.  **Check Notice:** View the supported game list and latest update info.
-3.  **Select Game:** Choose the game you want to optimize.
-4.  **Select Archive:** Choose the downloaded OptiScaler file. 
-    > **Do NOT extract** the file; use it as-is.
-5.  **Install:** Click the **Install** button.
-6.  **Run Game:** Follow the in-game instructions to enable upscaling/frame generation.
+3.  **Select Game:** Choose the game you want to install optimized OptiScaler files and settings.
+4.  **Install:** Click the **Install** button.
+5.  **Run Game:** Follow the in-game instructions to enable upscaling/frame generation.
     > Press `Insert` to verify with the OptiScaler overlay.
 
 &nbsp;
@@ -69,3 +67,7 @@
 | **REFramework** | [GitHub](https://github.com/praydog/reframework-nightly/releases) |
 
 &nbsp;
+
+
+![GitHub All Releases](https://img.shields.io/github/downloads/onehoon/OptiScalerInstaller/total?style=for-the-badge&color=orange)
+![GitHub Downloads (latest Release)](https://img.shields.io/github/downloads/onehoon/OptiScalerInstaller/latest/total?style=for-the-badge&label=latest%20download&color=brightgreen)
