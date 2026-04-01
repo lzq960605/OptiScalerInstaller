@@ -93,7 +93,6 @@ def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
     display_kr_keys = ["game_name_kr", "display_kr", "name_kr"]
     information_kr_keys = ["#information_kr", "information_kr", "info_kr"]
     supported_gpu_keys = ["supported_gpu", "supported gpu", "supported_gpus", "supported gpus", "gpu_support", "gpu support"]
-
     exe_col = next((c for c in columns if c in exe_keys), None)
     display_col = next((c for c in columns if c in display_keys), None)
     dll_col = next((c for c in columns if c in dll_keys), None)
@@ -110,7 +109,6 @@ def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
     display_kr_col = next((c for c in columns if c in display_kr_keys), None)
     information_kr_col = next((c for c in columns if c in information_kr_keys), None)
     supported_gpu_col = next((c for c in columns if c in supported_gpu_keys), None)
-
     if exe_col is None:
         exe_col = next((c for c in columns if "exe" in c or "file" in c), None)
     if display_col is None:
@@ -135,7 +133,6 @@ def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
         ingame_setting_col = next((c for c in columns if "ingame" in c and "setting" in c), None)
     if supported_gpu_col is None:
         supported_gpu_col = next((c for c in columns if "supported" in c and "gpu" in c), None)
-
     if exe_col is None or display_col is None:
         raise ValueError(
             f"DB header does not include required columns: "
@@ -158,7 +155,6 @@ def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
     display_kr_index = columns.index(display_kr_col) if display_kr_col else None
     information_kr_index = columns.index(information_kr_col) if information_kr_col else None
     supported_gpu_index = columns.index(supported_gpu_col) if supported_gpu_col else None
-
     ini_marker_index = next((i for i, c in enumerate(columns) if c == "#ini"), None)
     ini_var_indices = {}
     if ini_marker_index is not None:
@@ -195,7 +191,6 @@ def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
         information_kr = ""
         cover_url = ""
         supported_gpu = ""
-
         if dll_index is not None and len(row) > dll_index:
             dll_name = row[dll_index].strip()
         if optipatcher_index is not None and len(row) > optipatcher_index:
@@ -232,7 +227,6 @@ def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
             information_kr = row[information_kr_index].replace("\r\n", "\n").replace("\r", "\n").strip()
         if supported_gpu_index is not None and len(row) > supported_gpu_index:
             supported_gpu = str(row[supported_gpu_index]).strip()
-
         popup_kr = ""
         popup_en = ""
         if popup_kr_index is not None and len(row) > popup_kr_index:
