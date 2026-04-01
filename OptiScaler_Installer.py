@@ -24,6 +24,14 @@ import gpu_notice
 import gpu_service
 import installer_services
 import ini_utils
+from popup_markup import (
+    create_popup_markup_text,
+    estimate_wrapped_text_lines as _estimate_wrapped_text_lines,
+    render_markup_to_text_widget,
+    strip_markup_text,
+)
+from popup_utils import PopupFadeController, create_modal_popup, present_modal_popup
+from process_utils import subprocess_no_window_kwargs
 import sheet_loader
 if os.name == "nt":
     import winreg
@@ -196,18 +204,6 @@ try:
 except ModuleNotFoundError as e:
     logging.error("[APP] requests module not installed. Install: python -m pip install requests")
     raise e
-
-def _subprocess_no_window_kwargs() -> dict:
-    if os.name != "nt":
-        return {}
-
-    kwargs = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
-    startupinfo = subprocess.STARTUPINFO()
-    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-    startupinfo.wShowWindow = 0
-    kwargs["startupinfo"] = startupinfo
-    return kwargs
-
 
 def _get_forced_ui_language() -> Optional[bool]:
     raw = str(os.environ.get(UI_LANGUAGE_ENV, "") or "").strip().lower()
@@ -414,50 +410,6 @@ def _prepare_cover_image(img: Image.Image, target_w: int = TARGET_POSTER_W, targ
     return img.convert("RGBA")
 
 
-def _estimate_wrapped_text_lines(text: str, font: tkfont.Font, max_width_px: int) -> int:
-    normalized = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
-    available_width = max(32, int(max_width_px or 0))
-    total_lines = 0
-
-    for paragraph in normalized.split("\n"):
-        if paragraph == "":
-            total_lines += 1
-            continue
-
-        remaining = paragraph
-        while remaining:
-            if font.measure(remaining) <= available_width:
-                total_lines += 1
-                break
-
-            fit_len = 0
-            lo, hi = 1, len(remaining)
-            while lo <= hi:
-                mid = (lo + hi) // 2
-                if font.measure(remaining[:mid]) <= available_width:
-                    fit_len = mid
-                    lo = mid + 1
-                else:
-                    hi = mid - 1
-
-            if fit_len <= 0:
-                fit_len = 1
-
-            break_at = fit_len
-            for idx in range(fit_len - 1, 0, -1):
-                if remaining[idx].isspace():
-                    break_at = idx
-                    break
-
-            if break_at <= 0:
-                break_at = fit_len
-
-            total_lines += 1
-            remaining = remaining[break_at:].lstrip()
-
-    return max(1, total_lines)
-
-
 # ---------------------------------------------------------------------------
 # GUI
 # ---------------------------------------------------------------------------
@@ -585,53 +537,25 @@ class OptiManagerApp:
         self.root.after(250, self._capture_startup_width)
 
     def _show_game_selection_popup(self, message_text: str, on_confirm: callable = None, is_after_popup: bool = False):
-        popup = ctk.CTkToplevel(self.root)
-        popup.title("Installer Notice")
-        popup.transient(self.root)
-        popup.grab_set()
-        popup.resizable(False, False)
-        popup.configure(fg_color=_SURFACE)
-        popup.withdraw()
+        popup = create_modal_popup(self.root, "Installer Notice", _SURFACE)
 
         container = ctk.CTkFrame(popup, fg_color="transparent")
         container.pack(fill="both", padx=22, pady=(18, 8))
 
-        text_widget = tk.Text(
+        message_block = create_popup_markup_text(
             container,
-            wrap="word",
-            relief="flat",
-            borderwidth=0,
-            highlightthickness=0,
-            bg=_SURFACE,
-            fg="#E3EAF3",
-            width=58,
+            message_text,
+            background_color=_SURFACE,
+            body_text_color="#E3EAF3",
+            font_family=FONT_UI,
+            base_font_size=13,
+            emphasis_color="#FF4444",
+            emphasis_font_size=13,
+            emphasis_weight="normal",
         )
-        normal_font = tkfont.Font(family=FONT_UI, size=13)
-        text_widget.configure(font=normal_font, padx=0, pady=0, spacing1=0, spacing2=0, spacing3=0)
-
-        def insert_with_red(text):
-            idx = 0
-            while idx < len(text):
-                start = text.find("[RED]", idx)
-                if start == -1:
-                    text_widget.insert("end", text[idx:])
-                    break
-                text_widget.insert("end", text[idx:start])
-                end = text.find("[END]", start)
-                if end == -1:
-                    text_widget.insert("end", text[start+5:], "red")
-                    break
-                text_widget.insert("end", text[start+5:end], "red")
-                idx = end + 5
-
-        plain_message_text = re.sub(r"\[\s*(?:RED|END)\s*\]", "", message_text, flags=re.IGNORECASE)
-
-        if "[RED]" in message_text and "[END]" in message_text:
-            text_widget.tag_configure("red", foreground="#FF4444")
-            insert_with_red(message_text)
-        else:
-            text_widget.insert("end", message_text)
-
+        text_widget = message_block.widget
+        normal_font = message_block.base_font
+        plain_message_text = message_block.plain_text
         text_widget.pack(anchor="w", fill="x", pady=(0, 6))
 
         preferred_text_chars = 72
@@ -665,93 +589,22 @@ class OptiManagerApp:
 
         text_widget.configure(width=chosen_width, height=resolved_line_count, state="disabled")
 
-        fade_in_step = 0.14
-        fade_out_step = 0.18
-        fade_interval_ms = 18
-        fade_out_interval_ms = 16
-        fade_supported = False
-        fade_in_after_id = None
-        closing_popup = False
         confirm_button: Optional[ctk.CTkButton] = None
+        fade_controller = PopupFadeController(popup, debug_name="selection popup")
 
-        def _popup_exists() -> bool:
-            try:
-                return bool(popup.winfo_exists())
-            except Exception:
-                return False
-
-        def _get_popup_alpha() -> float:
-            try:
-                return float(popup.attributes("-alpha"))
-            except Exception:
-                return 1.0
-
-        def _finalize_close():
-            try:
-                popup.grab_release()
-            except Exception:
-                pass
-            try:
-                popup.destroy()
-            except Exception:
-                pass
+        def _after_close():
             if on_confirm:
                 self.root.after_idle(on_confirm)
 
-        def _fade_in(opacity: float = 0.0):
-            nonlocal fade_in_after_id
-            if closing_popup or not _popup_exists():
-                return
-            next_opacity = min(1.0, opacity + fade_in_step)
-            try:
-                popup.attributes("-alpha", next_opacity)
-            except Exception:
-                fade_in_after_id = None
-                logging.debug("Selection popup fade-in failed", exc_info=True)
-                try:
-                    popup.attributes("-alpha", 1.0)
-                except Exception:
-                    pass
-                return
-            if next_opacity < 1.0:
-                fade_in_after_id = popup.after(fade_interval_ms, _fade_in, next_opacity)
-            else:
-                fade_in_after_id = None
-
-        def _fade_out(opacity: float):
-            if not _popup_exists():
-                return
-            next_opacity = max(0.0, opacity - fade_out_step)
-            try:
-                popup.attributes("-alpha", next_opacity)
-            except Exception:
-                _finalize_close()
-                return
-            if next_opacity > 0.0:
-                popup.after(fade_out_interval_ms, _fade_out, next_opacity)
-            else:
-                _finalize_close()
-
         def _confirm():
-            nonlocal closing_popup, fade_in_after_id
-            if closing_popup:
+            if fade_controller.is_closing:
                 return
-            closing_popup = True
             if confirm_button is not None:
                 try:
                     confirm_button.configure(state="disabled")
                 except Exception:
                     pass
-            if fade_in_after_id is not None:
-                try:
-                    popup.after_cancel(fade_in_after_id)
-                except Exception:
-                    pass
-                fade_in_after_id = None
-            if fade_supported:
-                _fade_out(_get_popup_alpha())
-            else:
-                _finalize_close()
+            fade_controller.close(_after_close)
 
         confirm_button = ctk.CTkButton(
             container,
@@ -805,22 +658,12 @@ class OptiManagerApp:
                 logging.debug("Failed to size selection popup", exc_info=True)
 
         popup.protocol("WM_DELETE_WINDOW", lambda: None)  # Block closing without confirm
-        _apply_selection_popup_geometry(use_requested_size=True)
-        try:
-            popup.attributes("-alpha", 0.0)
-            fade_supported = True
-        except Exception:
-            fade_supported = False
-            logging.debug("Popup alpha fade is not supported for selection popup", exc_info=True)
-        popup.deiconify()
-        popup.lift()
-        try:
-            popup.focus_set()
-        except Exception:
-            pass
-        popup.after(0, _apply_selection_popup_geometry)
-        if fade_supported:
-            fade_in_after_id = popup.after(45, _fade_in, 0.0)
+        present_modal_popup(
+            popup,
+            initial_layout=lambda: _apply_selection_popup_geometry(use_requested_size=True),
+            after_idle_layout=_apply_selection_popup_geometry,
+            fade_controller=fade_controller,
+        )
 
     def _fetch_gpu_info_async(self):
         try:
@@ -831,12 +674,10 @@ class OptiManagerApp:
                 gpu_names=[],
                 gpu_count=0,
                 gpu_info="Unknown",
-                vendors=[],
                 selected_vendor="default",
                 selected_gid=SHEET_GID,
                 adapters=(),
                 selected_model_name="",
-                selected_display_name="",
             )
         try:
             self.root.after(
@@ -1536,7 +1377,7 @@ class OptiManagerApp:
         subprocess.Popen(
             [str(target)],
             cwd=str(target.parent),
-            **_subprocess_no_window_kwargs(),
+            **subprocess_no_window_kwargs(),
         )
 
     def _on_app_update_ready(self, launch_path: str, latest_version: str, error_message: Optional[str]):
@@ -1583,13 +1424,7 @@ class OptiManagerApp:
                 on_close()
             return
 
-        popup = ctk.CTkToplevel(self.root)
-        popup.title("Notice")
-        popup.transient(self.root)
-        popup.grab_set()
-        popup.resizable(False, False)
-        popup.configure(fg_color=_SURFACE)
-        popup.withdraw()
+        popup = create_modal_popup(self.root, "Notice", _SURFACE)
 
         container = ctk.CTkFrame(popup, fg_color="transparent")
         container.pack(fill="both", expand=True, padx=22, pady=(18, 12))
@@ -1599,23 +1434,20 @@ class OptiManagerApp:
         message_frame.grid_columnconfigure(0, weight=1)
         message_frame.grid_rowconfigure(0, weight=1)
 
-        # Parse [RED]... [END] and color only the text between
-        pattern = re.compile(r"\[\s*RED\s*\](.*?)\[\s*END\s*\]", re.IGNORECASE | re.DOTALL)
-        last = 0
-        message_text = tk.Text(
+        message_block = create_popup_markup_text(
             message_frame,
-            wrap="word",
-            relief="flat",
-            borderwidth=0,
-            highlightthickness=0,
-            bg=_SURFACE,
-            fg="#E3EAF3",
-            width=58,
+            text,
+            background_color=_SURFACE,
+            body_text_color="#E3EAF3",
+            font_family=FONT_UI,
+            base_font_size=13,
+            emphasis_color="#FF4D4F",
+            emphasis_font_size=14,
         )
-        normal_font = tkfont.Font(family=FONT_UI, size=13)
-        red_font = tkfont.Font(family=FONT_UI, size=14, weight="bold")
-        message_text.configure(font=normal_font, padx=0, pady=0, spacing1=0, spacing2=0, spacing3=0)
-        message_text.tag_configure("warning_red", foreground="#FF4D4F", font=red_font)
+        message_text = message_block.widget
+        normal_font = message_block.base_font
+        red_font = message_block.emphasis_font
+        full_plain_text = message_block.plain_text
         message_text.grid(row=0, column=0, sticky="nsew")
 
         scrollbar = ctk.CTkScrollbar(message_frame, orientation="vertical", command=message_text.yview)
@@ -1631,115 +1463,27 @@ class OptiManagerApp:
                 scrollbar.grid_remove()
                 scrollbar_visible = False
 
-        full_plain_text = ""
-        for m in pattern.finditer(text):
-            if m.start() > last:
-                normal = text[last:m.start()]
-                message_text.insert("end", normal)
-                full_plain_text += normal
-            red_text = m.group(1)
-            if red_text:
-                message_text.insert("end", red_text, ("warning_red",))
-                full_plain_text += red_text
-            last = m.end()
-        if last < len(text):
-            tail = text[last:]
-            message_text.insert("end", tail)
-            full_plain_text += tail
-
         message_text.configure(state="disabled")
 
         button_row = ctk.CTkFrame(container, fg_color="transparent")
         button_row.pack(fill="x", pady=(10, 0))
 
-        fade_in_step = 0.14
-        fade_out_step = 0.18
-        fade_interval_ms = 18
-        fade_out_interval_ms = 16
-        fade_supported = False
-        fade_in_after_id = None
-        closing_popup = False
         close_button: Optional[ctk.CTkButton] = None
+        fade_controller = PopupFadeController(popup, debug_name="startup warning popup")
 
-        def _popup_exists() -> bool:
-            try:
-                return bool(popup.winfo_exists())
-            except Exception:
-                return False
-
-        def _get_popup_alpha() -> float:
-            try:
-                return float(popup.attributes("-alpha"))
-            except Exception:
-                return 1.0
-
-        def _finalize_close():
-            try:
-                popup.grab_release()
-            except Exception:
-                pass
-            try:
-                popup.destroy()
-            except Exception:
-                pass
+        def _after_close():
             if callable(on_close):
                 on_close()
 
-        def _fade_in(opacity: float = 0.0):
-            nonlocal fade_in_after_id
-            if closing_popup or not _popup_exists():
-                return
-            next_opacity = min(1.0, opacity + fade_in_step)
-            try:
-                popup.attributes("-alpha", next_opacity)
-            except Exception:
-                fade_in_after_id = None
-                logging.debug("Startup warning popup fade-in failed", exc_info=True)
-                try:
-                    popup.attributes("-alpha", 1.0)
-                except Exception:
-                    pass
-                return
-            if next_opacity < 1.0:
-                fade_in_after_id = popup.after(fade_interval_ms, _fade_in, next_opacity)
-            else:
-                fade_in_after_id = None
-
-        def _fade_out(opacity: float):
-            if not _popup_exists():
-                return
-            next_opacity = max(0.0, opacity - fade_out_step)
-            try:
-                popup.attributes("-alpha", next_opacity)
-            except Exception:
-                logging.debug("Startup warning popup fade-out failed", exc_info=True)
-                _finalize_close()
-                return
-            if next_opacity > 0.0:
-                popup.after(fade_out_interval_ms, _fade_out, next_opacity)
-            else:
-                _finalize_close()
-
         def _close_popup():
-            nonlocal closing_popup, fade_in_after_id
-            if closing_popup:
+            if fade_controller.is_closing:
                 return
-            closing_popup = True
             if close_button is not None:
                 try:
                     close_button.configure(state="disabled")
                 except Exception:
                     pass
-            if fade_in_after_id is not None:
-                try:
-                    popup.after_cancel(fade_in_after_id)
-                except Exception:
-                    pass
-                fade_in_after_id = None
-            if fade_supported:
-                _fade_out(_get_popup_alpha())
-            else:
-                _finalize_close()
+            fade_controller.close(_after_close)
 
         close_button = ctk.CTkButton(
             button_row,
@@ -1863,23 +1607,13 @@ class OptiManagerApp:
                 logging.debug("Failed to size startup warning popup", exc_info=True)
 
         popup.protocol("WM_DELETE_WINDOW", _close_popup)
-        _layout_warning_popup()
-        try:
-            popup.attributes("-alpha", 0.0)
-            fade_supported = True
-        except Exception:
-            fade_supported = False
-            logging.debug("Popup alpha fade is not supported for startup warning popup", exc_info=True)
-        popup.deiconify()
-        popup.lift()
-        try:
-            popup.focus_set()
-        except Exception:
-            pass
-        _apply_warning_popup_geometry()
-        popup.after(0, _apply_warning_popup_geometry)
-        if fade_supported:
-            fade_in_after_id = popup.after(45, _fade_in, 0.0)
+        present_modal_popup(
+            popup,
+            initial_layout=_layout_warning_popup,
+            post_show_layout=_apply_warning_popup_geometry,
+            after_idle_layout=_apply_warning_popup_geometry,
+            fade_controller=fade_controller,
+        )
 
     def _get_auto_scan_paths(self) -> list:
         """Return existing directories to scan automatically on startup."""
@@ -1988,13 +1722,7 @@ class OptiManagerApp:
         desired_popup_w = min(max(360, root_w), max(360, screen_w - 40))
         max_popup_h = max(240, screen_h - 80)
 
-        popup = ctk.CTkToplevel(self.root)
-        popup.title("Supported Game List")
-        popup.transient(self.root)
-        popup.grab_set()
-        popup.resizable(False, False)
-        popup.configure(fg_color=_SURFACE)
-        popup.withdraw()
+        popup = create_modal_popup(self.root, "Supported Game List", _SURFACE)
 
         container = ctk.CTkFrame(popup, width=0, height=0, fg_color="transparent")
         container.pack(fill="both", padx=18, pady=(16, 14))
@@ -2041,94 +1769,22 @@ class OptiManagerApp:
                 height=16,
             ).grid(row=i, column=0, sticky="ew", padx=10, pady=0)
 
-        fade_in_step = 0.14
-        fade_out_step = 0.18
-        fade_interval_ms = 18
-        fade_out_interval_ms = 16
-        fade_supported = False
-        fade_in_after_id = None
-        closing_popup = False
         close_button: Optional[ctk.CTkButton] = None
+        fade_controller = PopupFadeController(popup, debug_name="supported-games popup")
 
-        def _popup_exists() -> bool:
-            try:
-                return bool(popup.winfo_exists())
-            except Exception:
-                return False
-
-        def _get_popup_alpha() -> float:
-            try:
-                return float(popup.attributes("-alpha"))
-            except Exception:
-                return 1.0
-
-        def _finalize_close():
-            try:
-                popup.grab_release()
-            except Exception:
-                pass
-            try:
-                popup.destroy()
-            except Exception:
-                pass
+        def _after_close():
             if callable(on_close):
                 on_close()
 
-        def _fade_in(opacity: float = 0.0):
-            nonlocal fade_in_after_id
-            if closing_popup or not _popup_exists():
-                return
-            next_opacity = min(1.0, opacity + fade_in_step)
-            try:
-                popup.attributes("-alpha", next_opacity)
-            except Exception:
-                fade_in_after_id = None
-                logging.debug("Supported-games popup fade-in failed", exc_info=True)
-                try:
-                    popup.attributes("-alpha", 1.0)
-                except Exception:
-                    pass
-                return
-            if next_opacity < 1.0:
-                fade_in_after_id = popup.after(fade_interval_ms, _fade_in, next_opacity)
-            else:
-                fade_in_after_id = None
-
-        def _fade_out(opacity: float):
-            if not _popup_exists():
-                return
-            next_opacity = max(0.0, opacity - fade_out_step)
-            try:
-                popup.attributes("-alpha", next_opacity)
-            except Exception:
-                logging.debug("Supported-games popup fade-out failed", exc_info=True)
-                _finalize_close()
-                return
-            if next_opacity > 0.0:
-                popup.after(fade_out_interval_ms, _fade_out, next_opacity)
-            else:
-                _finalize_close()
-
         def _close_popup():
-            nonlocal closing_popup, fade_in_after_id
-            if closing_popup:
+            if fade_controller.is_closing:
                 return
-            closing_popup = True
             if close_button is not None:
                 try:
                     close_button.configure(state="disabled")
                 except Exception:
                     pass
-            if fade_in_after_id is not None:
-                try:
-                    popup.after_cancel(fade_in_after_id)
-                except Exception:
-                    pass
-                fade_in_after_id = None
-            if fade_supported:
-                _fade_out(_get_popup_alpha())
-            else:
-                _finalize_close()
+            fade_controller.close(_after_close)
 
         close_button = ctk.CTkButton(
             container,
@@ -2197,22 +1853,12 @@ class OptiManagerApp:
                 logging.debug("Failed to size supported-games popup", exc_info=True)
 
         popup.protocol("WM_DELETE_WINDOW", _close_popup)
-        _apply_supported_games_popup_geometry(use_requested_size=True)
-        try:
-            popup.attributes("-alpha", 0.0)
-            fade_supported = True
-        except Exception:
-            fade_supported = False
-            logging.debug("Popup alpha fade is not supported for supported-games popup", exc_info=True)
-        popup.deiconify()
-        popup.lift()
-        try:
-            popup.focus_set()
-        except Exception:
-            pass
-        popup.after(0, _apply_supported_games_popup_geometry)
-        if fade_supported:
-            fade_in_after_id = popup.after(45, _fade_in, 0.0)
+        present_modal_popup(
+            popup,
+            initial_layout=lambda: _apply_supported_games_popup_geometry(use_requested_size=True),
+            after_idle_layout=_apply_supported_games_popup_geometry,
+            fade_controller=fade_controller,
+        )
 
     def _center_popup_on_root(self, popup: ctk.CTkToplevel, use_requested_size: bool = False):
         try:
@@ -2588,41 +2234,22 @@ class OptiManagerApp:
         except Exception as exc:
             logging.warning("Failed to render information markup, falling back to plain text: %s", exc)
             text_widget.delete("1.0", "end")
-            fallback_text = re.sub(r"\[\s*/?\s*(RED|END)\s*\]", "", info_text, flags=re.IGNORECASE)
+            fallback_text = strip_markup_text(info_text)
             text_widget.insert("1.0", fallback_text)
         finally:
             self.info_text.configure(state="disabled")
 
     def _insert_information_with_markup(self, raw_text: str):
-        # Supports [RED]... [END] segments from sheet information text.
         text_widget = getattr(self.info_text, "_textbox", self.info_text)
-
-        font_spec = text_widget.cget("font")
-        try:
-            base_font = tkfont.nametofont(font_spec)
-        except Exception:
-            # Some environments return an inline font spec, not a named Tk font.
-            base_font = tkfont.Font(font=font_spec)
-
-        red_font = tkfont.Font(font=base_font)
-        base_size = int(base_font.cget("size") or 12)
-        red_size = base_size + 1 if base_size >= 0 else base_size - 1
-        red_font.configure(size=red_size, weight="bold")
-        text_widget.tag_configure("info_red_emphasis", foreground="#FF4D4F", font=red_font)
-        self._info_red_font = red_font
-
-        pattern = re.compile(r"\[\s*RED\s*\](.*?)\[\s*END\s*\]", re.IGNORECASE | re.DOTALL)
-        cursor = 0
-        for match in pattern.finditer(raw_text):
-            start, end = match.span()
-            if start > cursor:
-                text_widget.insert("end", raw_text[cursor:start])
-            emphasized_text = match.group(1).strip()
-            text_widget.insert("end", emphasized_text, ("info_red_emphasis",))
-            cursor = end
-
-        if cursor < len(raw_text):
-            text_widget.insert("end", raw_text[cursor:])
+        render_markup_to_text_widget(
+            text_widget,
+            raw_text,
+            emphasis_tag="info_red_emphasis",
+            emphasis_color="#FF4D4F",
+            emphasis_size_offset=1,
+            emphasis_weight="bold",
+            trim_emphasis=True,
+        )
 
     # ------------------------------------------------------------------
     # Poster card grid

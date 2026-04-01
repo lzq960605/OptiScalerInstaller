@@ -8,6 +8,8 @@ import re
 import subprocess
 from typing import Mapping
 
+from process_utils import subprocess_no_window_kwargs
+
 
 _ALLOWED_VENDOR_KEYWORDS = (
     "intel", "amd", "nvidia",
@@ -40,28 +42,14 @@ class GpuContext:
     gpu_names: list[str]
     gpu_count: int
     gpu_info: str
-    vendors: list[str]
     selected_vendor: str
     selected_gid: int
     adapters: tuple[GpuAdapterChoice, ...] = ()
     selected_model_name: str = ""
-    selected_display_name: str = ""
 
     @property
     def is_multi_gpu(self) -> bool:
         return self.gpu_count > 1
-
-
-def _subprocess_no_window_kwargs() -> dict:
-    if os.name != "nt":
-        return {}
-
-    kwargs = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
-    startupinfo = subprocess.STARTUPINFO()
-    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-    startupinfo.wShowWindow = 0
-    kwargs["startupinfo"] = startupinfo
-    return kwargs
 
 
 def _is_truthy_env(name: str) -> bool:
@@ -121,7 +109,7 @@ def get_graphics_adapter_snapshot() -> tuple[list[str], int, str]:
             capture_output=True,
             text=True,
             timeout=8,
-            **_subprocess_no_window_kwargs(),
+            **subprocess_no_window_kwargs(),
         )
         if result.returncode != 0:
             return [], 0, "Unknown"
@@ -260,35 +248,23 @@ def detect_gpu_context(vendor_db_gids: Mapping[str, int], default_gid: int) -> G
     gpu_names, gpu_count, gpu_info = get_graphics_adapter_snapshot()
     adapters = build_gpu_adapter_choices(gpu_names, vendor_db_gids, default_gid)
 
-    vendors = []
-    seen_vendors = set()
-    for adapter in adapters:
-        if adapter.vendor in {"", "default"} or adapter.vendor in seen_vendors:
-            continue
-        seen_vendors.add(adapter.vendor)
-        vendors.append(adapter.vendor)
-
     selected_adapter = _select_preferred_adapter(adapters)
     if selected_adapter:
         selected_vendor = selected_adapter.vendor
         selected_gid = int(selected_adapter.selected_gid or default_gid)
         selected_model_name = selected_adapter.model_name
-        selected_display_name = selected_adapter.display_name
     else:
         selected_vendor, selected_gid = resolve_game_db_target_for_gpu(gpu_info, vendor_db_gids, default_gid)
         selected_model_name = ""
-        selected_display_name = ""
 
     return GpuContext(
         gpu_names=list(gpu_names),
         gpu_count=max(0, int(gpu_count or 0)),
         gpu_info=gpu_info,
-        vendors=vendors,
         selected_vendor=selected_vendor,
         selected_gid=int(selected_gid or default_gid),
         adapters=adapters,
         selected_model_name=selected_model_name,
-        selected_display_name=selected_display_name,
     )
 
 

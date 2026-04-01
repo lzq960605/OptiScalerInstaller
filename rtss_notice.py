@@ -4,13 +4,12 @@ from dataclasses import dataclass
 import logging
 import os
 from pathlib import Path
-import re
-import tkinter as tk
-import tkinter.font as tkfont
 from typing import Any, Mapping, Optional
 
 import customtkinter as ctk
 from PIL import Image
+from popup_markup import create_popup_markup_text, estimate_wrapped_text_lines
+from popup_utils import PopupFadeController, create_modal_popup, present_modal_popup
 
 if os.name == "nt":
     import winreg
@@ -204,52 +203,25 @@ def _show_rtss_popup(
     assets_dir: Path,
     theme: RtssNoticeTheme,
 ) -> None:
-    popup = ctk.CTkToplevel(root)
-    popup.title("RTSS Notice")
-    popup.transient(root)
-    popup.grab_set()
-    popup.resizable(False, False)
-    popup.configure(fg_color=theme.surface_color)
-    popup.withdraw()
+    popup = create_modal_popup(root, "RTSS Notice", theme.surface_color)
 
     container = ctk.CTkFrame(popup, fg_color="transparent")
     container.pack(fill="both", expand=True, padx=22, pady=(18, 12))
 
     text = message_text or "(No message)"
-    pattern = re.compile(r"\[\s*RED\s*\](.*?)\[\s*END\s*\]", re.IGNORECASE | re.DOTALL)
-    last = 0
-    message_widget = tk.Text(
+    message_block = create_popup_markup_text(
         container,
-        wrap="word",
-        relief="flat",
-        borderwidth=0,
-        highlightthickness=0,
-        bg=theme.surface_color,
-        fg=theme.body_text_color,
-        width=58,
+        text,
+        background_color=theme.surface_color,
+        body_text_color=theme.body_text_color,
+        font_family=theme.font_ui,
+        base_font_size=13,
+        emphasis_color=theme.warning_text_color,
+        emphasis_font_size=14,
     )
-    normal_font = tkfont.Font(family=theme.font_ui, size=13)
-    red_font = tkfont.Font(family=theme.font_ui, size=14, weight="bold")
-    message_widget.configure(font=normal_font)
-    message_widget.tag_configure("warning_red", foreground=theme.warning_text_color, font=red_font)
-
-    full_plain_text = ""
-    for match in pattern.finditer(text):
-        if match.start() > last:
-            normal = text[last:match.start()]
-            message_widget.insert("end", normal)
-            full_plain_text += normal
-        red_text = match.group(1)
-        if red_text:
-            message_widget.insert("end", red_text, ("warning_red",))
-            full_plain_text += red_text
-        last = match.end()
-    if last < len(text):
-        tail = text[last:]
-        message_widget.insert("end", tail)
-        full_plain_text += tail
-
-    line_count = max(1, min(16, full_plain_text.count("\n") + 1))
+    message_widget = message_block.widget
+    wrap_width_px = max(32, int(message_block.base_font.measure("0")) * int(message_widget.cget("width")))
+    line_count = max(1, min(16, estimate_wrapped_text_lines(message_block.plain_text, message_block.base_font, wrap_width_px)))
     message_widget.configure(height=line_count)
     message_widget.configure(state="disabled")
     message_widget.pack(anchor="w", fill="x")
@@ -268,92 +240,18 @@ def _show_rtss_popup(
     except Exception:
         logging.debug("Failed to load RTSS notice image", exc_info=True)
 
-    fade_in_step = 0.14
-    fade_out_step = 0.18
-    fade_interval_ms = 18
-    fade_out_interval_ms = 16
-    fade_supported = False
-    fade_in_after_id = None
-    closing_popup = False
     close_button: Optional[ctk.CTkButton] = None
-
-    def _popup_exists() -> bool:
-        try:
-            return bool(popup.winfo_exists())
-        except Exception:
-            return False
-
-    def _get_popup_alpha() -> float:
-        try:
-            return float(popup.attributes("-alpha"))
-        except Exception:
-            return 1.0
-
-    def _finalize_close() -> None:
-        try:
-            popup.grab_release()
-        except Exception:
-            pass
-        try:
-            popup.destroy()
-        except Exception:
-            pass
-
-    def _fade_in(opacity: float = 0.0) -> None:
-        nonlocal fade_in_after_id
-        if closing_popup or not _popup_exists():
-            return
-        next_opacity = min(1.0, opacity + fade_in_step)
-        try:
-            popup.attributes("-alpha", next_opacity)
-        except Exception:
-            fade_in_after_id = None
-            logging.debug("RTSS popup fade-in failed", exc_info=True)
-            try:
-                popup.attributes("-alpha", 1.0)
-            except Exception:
-                pass
-            return
-        if next_opacity < 1.0:
-            fade_in_after_id = popup.after(fade_interval_ms, _fade_in, next_opacity)
-        else:
-            fade_in_after_id = None
-
-    def _fade_out(opacity: float) -> None:
-        if not _popup_exists():
-            return
-        next_opacity = max(0.0, opacity - fade_out_step)
-        try:
-            popup.attributes("-alpha", next_opacity)
-        except Exception:
-            logging.debug("RTSS popup fade-out failed", exc_info=True)
-            _finalize_close()
-            return
-        if next_opacity > 0.0:
-            popup.after(fade_out_interval_ms, _fade_out, next_opacity)
-        else:
-            _finalize_close()
+    fade_controller = PopupFadeController(popup, debug_name="RTSS popup")
 
     def _close_popup():
-        nonlocal closing_popup, fade_in_after_id
-        if closing_popup:
+        if fade_controller.is_closing:
             return
-        closing_popup = True
         if close_button is not None:
             try:
                 close_button.configure(state="disabled")
             except Exception:
                 pass
-        if fade_in_after_id is not None:
-            try:
-                popup.after_cancel(fade_in_after_id)
-            except Exception:
-                pass
-            fade_in_after_id = None
-        if fade_supported:
-            _fade_out(_get_popup_alpha())
-        else:
-            _finalize_close()
+        fade_controller.close()
 
     close_button = ctk.CTkButton(
         popup,
@@ -370,22 +268,12 @@ def _show_rtss_popup(
     close_button.pack(pady=(0, 14))
 
     popup.protocol("WM_DELETE_WINDOW", _close_popup)
-    _center_rtss_popup_on_root(root, popup, use_requested_size=True)
-    try:
-        popup.attributes("-alpha", 0.0)
-        fade_supported = True
-    except Exception:
-        fade_supported = False
-        logging.debug("Popup alpha fade is not supported for RTSS popup", exc_info=True)
-    popup.deiconify()
-    popup.lift()
-    try:
-        popup.focus_set()
-    except Exception:
-        pass
-    popup.after(0, lambda p=popup: _center_rtss_popup_on_root(root, p))
-    if fade_supported:
-        fade_in_after_id = popup.after(45, _fade_in, 0.0)
+    present_modal_popup(
+        popup,
+        initial_layout=lambda: _center_rtss_popup_on_root(root, popup, use_requested_size=True),
+        after_idle_layout=lambda p=popup: _center_rtss_popup_on_root(root, p),
+        fade_controller=fade_controller,
+    )
     popup.wait_window()
 
 

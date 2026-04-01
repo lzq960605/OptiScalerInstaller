@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from network_utils import build_retry_session
+from process_utils import subprocess_no_window_kwargs
 
 try:
     import py7zr
@@ -38,18 +39,6 @@ OPTISCALER_LEGACY_REMOVE_NAMES = {
 OPTISCALER_PROXY_FALLBACK_NAMES = ("winmm.dll", "version.dll")
 
 _file_session = build_retry_session()
-
-
-def _subprocess_no_window_kwargs() -> dict:
-    if os.name != "nt":
-        return {}
-
-    kwargs = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
-    startupinfo = subprocess.STARTUPINFO()
-    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-    startupinfo.wShowWindow = 0
-    kwargs["startupinfo"] = startupinfo
-    return kwargs
 
 
 def _normalize_rel_path(rel_path: str) -> str:
@@ -371,7 +360,7 @@ def extract_archive(archive_path, target_path, logger=None):
                     capture_output=True,
                     text=True,
                     check=True,
-                    **_subprocess_no_window_kwargs(),
+                    **subprocess_no_window_kwargs(),
                 )
                 for member_name in listing.stdout.splitlines():
                     if not _is_archive_member_path_safe(target_dir, member_name):
@@ -379,7 +368,7 @@ def extract_archive(archive_path, target_path, logger=None):
                 subprocess.run(
                     [tar_exe, "-xf", archive_path, "-C", target_path],
                     check=True,
-                    **_subprocess_no_window_kwargs(),
+                    **subprocess_no_window_kwargs(),
                 )
                 if logger:
                     logger.info(f"Extracted archive {archive_path} to {target_path} using tar.exe")

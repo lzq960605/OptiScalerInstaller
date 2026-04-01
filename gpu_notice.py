@@ -5,6 +5,8 @@ import logging
 from typing import Optional, Sequence, TYPE_CHECKING
 
 import customtkinter as ctk
+from popup_markup import create_popup_markup_text, estimate_wrapped_text_lines
+from popup_utils import PopupFadeController, close_modal_popup, create_modal_popup, present_modal_popup
 
 if TYPE_CHECKING:
     from gpu_service import GpuAdapterChoice
@@ -17,6 +19,7 @@ class GpuNoticeTheme:
     accent_hover_color: str
     font_ui: str
     body_text_color: str = "#E3EAF3"
+    warning_text_color: str = "#FF4D4F"
     button_text_color: str = "#000000"
 
 
@@ -153,34 +156,29 @@ def show_unsupported_gpu_notice(
     desired_popup_width = _resolve_popup_width(root, UNSUPPORTED_GPU_POPUP_MIN_W)
     message_width = max(280, desired_popup_width - 88)
 
-    popup = ctk.CTkToplevel(root)
-    popup.title(get_unsupported_gpu_title(use_korean))
-    popup.transient(root)
-    popup.grab_set()
-    popup.resizable(False, False)
-    popup.configure(fg_color=theme.surface_color)
-    popup.withdraw()
+    popup = create_modal_popup(root, get_unsupported_gpu_title(use_korean), theme.surface_color)
 
     container = ctk.CTkFrame(popup, fg_color="transparent")
     container.pack(fill="both", expand=True, padx=22, pady=(20, 18))
 
-    ctk.CTkLabel(
+    message_block = create_popup_markup_text(
         container,
-        text=get_unsupported_gpu_message(use_korean),
-        justify="left",
-        anchor="w",
-        width=message_width,
-        wraplength=message_width,
-        text_color=theme.body_text_color,
-        font=ctk.CTkFont(family=theme.font_ui, size=13),
-    ).pack(fill="x", pady=(0, 14))
+        get_unsupported_gpu_message(use_korean),
+        background_color=theme.surface_color,
+        body_text_color=theme.body_text_color,
+        font_family=theme.font_ui,
+        base_font_size=13,
+        emphasis_color=theme.warning_text_color,
+    )
+    message_widget = message_block.widget
+    zero_char_width = max(7, int(message_block.base_font.measure("0")))
+    text_width_chars = max(28, (message_width + max(1, zero_char_width) - 1) // max(1, zero_char_width))
+    line_count = estimate_wrapped_text_lines(message_block.plain_text, message_block.base_font, message_width)
+    message_widget.configure(width=text_width_chars, height=line_count, state="disabled")
+    message_widget.pack(fill="x", pady=(0, 14))
 
     def _close_popup() -> None:
-        try:
-            popup.grab_release()
-        except Exception:
-            pass
-        popup.destroy()
+        close_modal_popup(popup)
 
     ctk.CTkButton(
         container,
@@ -196,14 +194,20 @@ def show_unsupported_gpu_notice(
     ).pack()
 
     popup.protocol("WM_DELETE_WINDOW", _close_popup)
-    popup.deiconify()
-    popup.lift()
-    try:
-        popup.focus_set()
-    except Exception:
-        pass
-    _center_gpu_popup_on_root(root, popup, target_width_px=desired_popup_width, use_requested_size=True)
-    popup.after(0, lambda p=popup: _center_gpu_popup_on_root(root, p, target_width_px=desired_popup_width))
+    present_modal_popup(
+        popup,
+        initial_layout=lambda: _center_gpu_popup_on_root(
+            root,
+            popup,
+            target_width_px=desired_popup_width,
+            use_requested_size=True,
+        ),
+        after_idle_layout=lambda p=popup: _center_gpu_popup_on_root(
+            root,
+            p,
+            target_width_px=desired_popup_width,
+        ),
+    )
     popup.wait_window()
 
 
@@ -223,124 +227,54 @@ def select_dual_gpu_adapter(
     button_row_width = (DUAL_GPU_BUTTON_W * 2) + (DUAL_GPU_BUTTON_GAP * 2)
     message_width = max(320, min(max_message_width, button_row_width))
 
-    popup = ctk.CTkToplevel(root)
-    popup.title("GPU Selection" if not use_korean else "GPU 선택")
-    popup.transient(root)
-    popup.grab_set()
-    popup.resizable(False, False)
-    popup.configure(fg_color=theme.surface_color)
-    popup.withdraw()
+    popup = create_modal_popup(
+        root,
+        "GPU Selection" if not use_korean else "GPU 선택",
+        theme.surface_color,
+    )
 
     container = ctk.CTkFrame(popup, fg_color="transparent")
     container.pack(fill="both", expand=True, padx=22, pady=(20, 18))
 
-    ctk.CTkLabel(
+    message_block = create_popup_markup_text(
         container,
-        text=_get_dual_gpu_selection_message(use_korean),
-        justify="left",
-        anchor="w",
-        width=message_width,
-        wraplength=message_width,
-        text_color=theme.body_text_color,
-        font=ctk.CTkFont(family=theme.font_ui, size=13),
-    ).pack(fill="x", pady=(0, 16))
+        _get_dual_gpu_selection_message(use_korean),
+        background_color=theme.surface_color,
+        body_text_color=theme.body_text_color,
+        font_family=theme.font_ui,
+        base_font_size=13,
+        emphasis_color=theme.warning_text_color,
+    )
+    message_widget = message_block.widget
+    zero_char_width = max(7, int(message_block.base_font.measure("0")))
+    text_width_chars = max(32, (message_width + max(1, zero_char_width) - 1) // max(1, zero_char_width))
+    line_count = estimate_wrapped_text_lines(message_block.plain_text, message_block.base_font, message_width)
+    message_widget.configure(width=text_width_chars, height=line_count, state="disabled")
+    message_widget.pack(fill="x", pady=(0, 16))
 
     button_row = ctk.CTkFrame(container, fg_color="transparent")
     button_row.pack(anchor="center")
 
     choice_buttons: list[ctk.CTkButton] = []
-    fade_in_step = 0.14
-    fade_out_step = 0.18
-    fade_interval_ms = 18
-    fade_out_interval_ms = 16
-    fade_supported = False
-    fade_in_after_id = None
-    closing_popup = False
-
-    def _popup_exists() -> bool:
-        try:
-            return bool(popup.winfo_exists())
-        except Exception:
-            return False
-
-    def _get_popup_alpha() -> float:
-        try:
-            return float(popup.attributes("-alpha"))
-        except Exception:
-            return 1.0
-
-    def _finalize_close() -> None:
-        try:
-            popup.grab_release()
-        except Exception:
-            pass
-        try:
-            popup.destroy()
-        except Exception:
-            pass
-
-    def _fade_in(opacity: float = 0.0) -> None:
-        nonlocal fade_in_after_id
-        if closing_popup or not _popup_exists():
-            return
-        next_opacity = min(1.0, opacity + fade_in_step)
-        try:
-            popup.attributes("-alpha", next_opacity)
-        except Exception:
-            fade_in_after_id = None
-            logging.debug("GPU selection popup fade-in failed", exc_info=True)
-            try:
-                popup.attributes("-alpha", 1.0)
-            except Exception:
-                pass
-            return
-        if next_opacity < 1.0:
-            fade_in_after_id = popup.after(fade_interval_ms, _fade_in, next_opacity)
-        else:
-            fade_in_after_id = None
-
-    def _fade_out(opacity: float) -> None:
-        if not _popup_exists():
-            return
-        next_opacity = max(0.0, opacity - fade_out_step)
-        try:
-            popup.attributes("-alpha", next_opacity)
-        except Exception:
-            logging.debug("GPU selection popup fade-out failed", exc_info=True)
-            _finalize_close()
-            return
-        if next_opacity > 0.0:
-            popup.after(fade_out_interval_ms, _fade_out, next_opacity)
-        else:
-            _finalize_close()
+    fade_controller = PopupFadeController(popup, debug_name="GPU selection popup")
 
     def _close_with_selection(adapter: "GpuAdapterChoice") -> None:
-        nonlocal selected_adapter, closing_popup, fade_in_after_id
-        if selected_adapter is not None or closing_popup:
+        nonlocal selected_adapter
+        if selected_adapter is not None or fade_controller.is_closing:
             return
 
         selected_adapter = adapter
-        closing_popup = True
         for btn in choice_buttons:
             try:
                 btn.configure(state="disabled")
             except Exception:
                 pass
-        if fade_in_after_id is not None:
-            try:
-                popup.after_cancel(fade_in_after_id)
-            except Exception:
-                pass
-            fade_in_after_id = None
-        if fade_supported:
-            _fade_out(_get_popup_alpha())
-        else:
-            _finalize_close()
+        fade_controller.close()
 
     for col_idx, adapter in enumerate(adapter_choices):
-        button_theme = _get_vendor_button_theme(getattr(adapter, "vendor", ""), theme)
-        vendor_label = _get_vendor_display_name(getattr(adapter, "vendor", ""))
-        model_label = str(getattr(adapter, "display_name", "") or getattr(adapter, "model_name", "") or "").strip()
+        button_theme = _get_vendor_button_theme(adapter.vendor, theme)
+        vendor_label = _get_vendor_display_name(adapter.vendor)
+        model_label = str(adapter.display_name or adapter.model_name or "").strip()
         button_text = vendor_label if not model_label else f"{vendor_label}\n{model_label}"
         btn = ctk.CTkButton(
             button_row,
@@ -358,21 +292,11 @@ def select_dual_gpu_adapter(
         choice_buttons.append(btn)
 
     popup.protocol("WM_DELETE_WINDOW", lambda: None)
-    _center_gpu_popup_on_root(root, popup, use_requested_size=True)
-    try:
-        popup.attributes("-alpha", 0.0)
-        fade_supported = True
-    except Exception:
-        fade_supported = False
-        logging.debug("Popup alpha fade is not supported for GPU selection popup", exc_info=True)
-    popup.deiconify()
-    popup.lift()
-    try:
-        popup.focus_set()
-    except Exception:
-        pass
-    popup.after(0, lambda p=popup: _center_gpu_popup_on_root(root, p))
-    if fade_supported:
-        fade_in_after_id = popup.after(45, _fade_in, 0.0)
+    present_modal_popup(
+        popup,
+        initial_layout=lambda: _center_gpu_popup_on_root(root, popup, use_requested_size=True),
+        after_idle_layout=lambda p=popup: _center_gpu_popup_on_root(root, p),
+        fade_controller=fade_controller,
+    )
     popup.wait_window()
     return selected_adapter
