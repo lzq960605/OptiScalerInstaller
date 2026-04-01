@@ -455,6 +455,26 @@ ctk.set_default_color_theme("blue")
 _ACCENT = "#4CC9F0"
 _ACCENT_HOVER = "#35B6E0"
 _ACCENT_SUCCESS = "#7EE1AA"
+_TITLE_TEXT = "#D6DCE5"
+_BROWSE_BUTTON = "#5B6574"
+_BROWSE_BUTTON_HOVER = "#6A7587"
+_POPUP_OK_BUTTON = "#8A95A3"
+_POPUP_OK_BUTTON_HOVER = "#99A4B1"
+_STATUS_TEXT = "#C5CFDB"
+_SECTION_LABEL_TEXT = "#C5CFDB"
+_SELECTED_GAME_HIGHLIGHT = "#FFCB62"
+_SCAN_STATUS_TEXT = "#AEB9C8"
+_STATUS_INDICATOR_LOADING = "#7EE1AA"
+_STATUS_INDICATOR_LOADING_DIM = "#415C4D"
+_STATUS_INDICATOR_ONLINE = "#7EE1AA"
+_STATUS_INDICATOR_WARNING = "#FFCB62"
+_STATUS_INDICATOR_OFFLINE = "#FF8A8A"
+_STATUS_INDICATOR_SIZE = 10
+_STATUS_INDICATOR_PULSE_MS = 620
+_CONTENT_SIDE_PAD = 20
+_META_RIGHT_PAD = 5
+_SCAN_META_RIGHT_INSET = _CONTENT_SIDE_PAD + _META_RIGHT_PAD
+_META_VALUE_GAP = 8
 _LINK_ACTIVE = "#7DD3FC"
 _LINK_HOVER = "#38BDF8"
 _CARD_BG = "#181B21"
@@ -581,6 +601,10 @@ class OptiManagerApp:
         self._scan_in_progress = False
         self._auto_scan_active = False
         self._retry_attempted = False
+        self._status_indicator_after_id = None
+        self._status_indicator_pulse_visible = True
+        self._status_indicator_pulse_colors = (_STATUS_INDICATOR_LOADING, _STATUS_INDICATOR_LOADING_DIM)
+        self._meta_label_width = self._measure_meta_label_width()
         self.setup_ui()
         # Fetch GPU info asynchronously to avoid blocking startup on slow PowerShell
         try:
@@ -708,9 +732,9 @@ class OptiManagerApp:
             width=100,
             height=34,
             corner_radius=8,
-            fg_color=_ACCENT,
-            hover_color=_ACCENT_HOVER,
-            text_color="#000000",
+            fg_color=_POPUP_OK_BUTTON,
+            hover_color=_POPUP_OK_BUTTON_HOVER,
+            text_color="#0B121A",
             font=ctk.CTkFont(family=FONT_UI, size=12, weight="bold"),
             command=_confirm,
         )
@@ -808,10 +832,9 @@ class OptiManagerApp:
 
         if hasattr(self, "btn_select_folder") and self.btn_select_folder:
             self.btn_select_folder.configure(state="disabled")
-        if hasattr(self, "lbl_game_path") and self.lbl_game_path:
-            text = "3개 이상의 GPU는 지원되지 않습니다." if USE_KOREAN else "3 or more GPUs are not supported."
-            self.lbl_game_path.configure(text=text, text_color="#FF8A8A")
-            self.root.after(0, self._align_supported_games_count_label)
+        text = "3개 이상의 GPU는 지원되지 않습니다." if USE_KOREAN else "3 or more GPUs are not supported."
+        self._set_supported_games_value(None)
+        self._set_scan_status_message(text, "#FF8A8A")
         self._clear_cards()
         if hasattr(self, "info_text") and self.info_text:
             self._set_information_text(gpu_notice.get_unsupported_gpu_message(USE_KOREAN))
@@ -847,6 +870,8 @@ class OptiManagerApp:
         if hasattr(self, "gpu_lbl") and self.gpu_lbl:
             self.gpu_lbl.configure(text=f"GPU: {self.gpu_info}")
 
+        self._set_supported_games_value(None)
+        self._set_scan_status_message("")
         self._update_sheet_status()
         self._update_install_button_state()
 
@@ -869,6 +894,8 @@ class OptiManagerApp:
                 self.gpu_info = "GPU 선택 대기 중" if USE_KOREAN else "Waiting for GPU selection"
                 if hasattr(self, "gpu_lbl") and self.gpu_lbl:
                     self.gpu_lbl.configure(text=f"GPU: {self.gpu_info}")
+                self._set_supported_games_value(None)
+                self._set_scan_status_message("")
                 self._update_sheet_status()
                 self._update_install_button_state()
                 selected_adapter = gpu_notice.select_dual_gpu_adapter(
@@ -892,32 +919,82 @@ class OptiManagerApp:
     def _is_game_supported_for_current_gpu(self, game_data: dict) -> bool:
         return gpu_service.matches_gpu_rule(str(game_data.get("supported_gpu", "") or ""), self.gpu_info)
 
-    def _align_supported_games_count_label(self):
+    def _measure_meta_label_width(self) -> int:
         try:
-            if not hasattr(self, "lbl_game_path") or not hasattr(self, "status_badge") or not hasattr(self, "scan_row"):
-                return
-            if not self.lbl_game_path.winfo_exists() or not self.status_badge.winfo_exists() or not self.scan_row.winfo_exists():
-                return
-
-            self.root.update_idletasks()
-            label_width = max(self.lbl_game_path.winfo_reqwidth(), self.lbl_game_path.winfo_width())
-            if label_width <= 1:
-                return
-
-            badge_center_root = self.status_badge.winfo_rootx() + (self.status_badge.winfo_width() / 2.0)
-            row_root_x = self.scan_row.winfo_rootx()
-            desired_left = int(round(badge_center_root - row_root_x - (label_width / 2.0)))
-
-            button_right = 0
-            if hasattr(self, "btn_select_folder") and self.btn_select_folder.winfo_exists():
-                button_right = self.btn_select_folder.winfo_x() + self.btn_select_folder.winfo_width() + 18
-
-            row_width = max(1, self.scan_row.winfo_width())
-            max_left = max(button_right, row_width - label_width - 20)
-            clamped_left = max(button_right, min(desired_left, max_left))
-            self.lbl_game_path.place_configure(x=clamped_left, rely=0.5, anchor="w")
+            meta_font = tkfont.Font(family=FONT_UI, size=12, weight="bold")
+            selected_label = "선택된 게임:" if USE_KOREAN else "Selected Game:"
+            candidates = ("Supported Games:", selected_label)
+            return max(meta_font.measure(text) for text in candidates) + 2
         except Exception:
-            logging.debug("Failed to align supported-games count label", exc_info=True)
+            return 120
+
+    def _align_supported_games_count_label(self):
+        return
+
+    def _set_supported_games_value(self, value: Optional[object], text_color: str = _SECTION_LABEL_TEXT):
+        if not hasattr(self, "lbl_supported_games_value") or not self.lbl_supported_games_value.winfo_exists():
+            return
+        display_value = "" if value is None else str(value)
+        self.lbl_supported_games_value.configure(text=display_value, text_color=text_color)
+
+    def _set_scan_status_message(self, text: str = "", text_color: str = _SCAN_STATUS_TEXT):
+        if not hasattr(self, "lbl_scan_status") or not self.lbl_scan_status.winfo_exists():
+            return
+        message = str(text or "").strip()
+        if not message:
+            self.lbl_scan_status.configure(text="")
+            self.lbl_scan_status.grid_remove()
+            return
+
+        self.lbl_scan_status.configure(text=message, text_color=text_color)
+        self.lbl_scan_status.grid()
+
+    def _set_status_badge_state(self, label_text: str, indicator_color: str, pulse: bool = False):
+        if not hasattr(self, "status_badge_label") or not hasattr(self, "status_badge_dot"):
+            return
+        if not self.status_badge_label.winfo_exists() or not self.status_badge_dot.winfo_exists():
+            return
+
+        self.status_badge_label.configure(text=label_text, text_color=_STATUS_TEXT)
+        if pulse:
+            self._start_status_badge_pulse(indicator_color, _STATUS_INDICATOR_LOADING_DIM)
+            return
+
+        self._stop_status_badge_pulse()
+        self.status_badge_dot.configure(fg_color=indicator_color)
+
+    def _start_status_badge_pulse(self, active_color: str, dim_color: str):
+        self._stop_status_badge_pulse()
+        self._status_indicator_pulse_colors = (active_color, dim_color)
+        self._status_indicator_pulse_visible = True
+        self.status_badge_dot.configure(fg_color=active_color)
+        self._status_indicator_after_id = self.root.after(
+            _STATUS_INDICATOR_PULSE_MS,
+            self._tick_status_badge_pulse,
+        )
+
+    def _stop_status_badge_pulse(self):
+        try:
+            if self._status_indicator_after_id is not None:
+                self.root.after_cancel(self._status_indicator_after_id)
+        except Exception:
+            pass
+        self._status_indicator_after_id = None
+        self._status_indicator_pulse_visible = True
+
+    def _tick_status_badge_pulse(self):
+        self._status_indicator_after_id = None
+        if not hasattr(self, "status_badge_dot") or not self.root.winfo_exists() or not self.status_badge_dot.winfo_exists():
+            return
+
+        active_color, dim_color = self._status_indicator_pulse_colors
+        next_visible = not self._status_indicator_pulse_visible
+        self._status_indicator_pulse_visible = next_visible
+        self.status_badge_dot.configure(fg_color=active_color if next_visible else dim_color)
+        self._status_indicator_after_id = self.root.after(
+            _STATUS_INDICATOR_PULSE_MS,
+            self._tick_status_badge_pulse,
+        )
 
     def _get_selected_game_header_parts(self) -> tuple[str, str]:
         label = "선택된 게임" if USE_KOREAN else "Selected Game"
@@ -931,7 +1008,7 @@ class OptiManagerApp:
             game_name = str(game.get("game_name", "") or game.get("display", "")).strip()
         if not game_name:
             return "", ""
-        return f"{label}: ", game_name
+        return f"{label}:", game_name
 
     def _update_selected_game_header(self):
         try:
@@ -1028,6 +1105,12 @@ class OptiManagerApp:
             if self._overflow_fit_after_id is not None:
                 self.root.after_cancel(self._overflow_fit_after_id)
                 self._overflow_fit_after_id = None
+        except Exception:
+            pass
+        try:
+            if self._status_indicator_after_id is not None:
+                self.root.after_cancel(self._status_indicator_after_id)
+                self._status_indicator_after_id = None
         except Exception:
             pass
         try:
@@ -1587,9 +1670,9 @@ class OptiManagerApp:
             width=100,
             height=34,
             corner_radius=8,
-            fg_color=_ACCENT,
-            hover_color=_ACCENT_HOVER,
-            text_color="#000000",
+            fg_color=_POPUP_OK_BUTTON,
+            hover_color=_POPUP_OK_BUTTON_HOVER,
+            text_color="#0B121A",
             font=ctk.CTkFont(family=FONT_UI, size=12, weight="bold"),
             command=_close_popup,
         )
@@ -1777,7 +1860,8 @@ class OptiManagerApp:
         if not scan_paths:
             return
 
-        self.lbl_game_path.configure(text="Scanning...", text_color="#F1F5F9")
+        self._set_supported_games_value(0)
+        self._set_scan_status_message("Scanning...", "#F1F5F9")
         self.found_exe_list = []
         self._clear_cards()
         self._configure_card_columns(self._get_dynamic_column_count())
@@ -1888,9 +1972,9 @@ class OptiManagerApp:
             width=100,
             height=34,
             corner_radius=8,
-            fg_color=_ACCENT,
-            hover_color=_ACCENT_HOVER,
-            text_color="#000000",
+            fg_color=_POPUP_OK_BUTTON,
+            hover_color=_POPUP_OK_BUTTON_HOVER,
+            text_color="#0B121A",
             font=ctk.CTkFont(family=FONT_UI, size=12, weight="bold"),
             command=_close_popup,
         )
@@ -2008,7 +2092,7 @@ class OptiManagerApp:
             hdr,
             text=f"OptiScaler Installer",
             font=ctk.CTkFont(family=FONT_HEADING, size=20, weight="bold"),
-            text_color=_ACCENT,
+            text_color=_TITLE_TEXT,
         )
         title_lbl.grid(row=0, column=0, padx=24, pady=(18, 2), sticky="w")
 
@@ -2025,16 +2109,33 @@ class OptiManagerApp:
         )
         self.gpu_lbl.grid(row=0, column=0, padx=(1, 0), sticky="w")
 
-        # Badge-style status indicator
-        self.status_badge = ctk.CTkLabel(
+        # Compact header status indicator
+        self.status_badge = ctk.CTkFrame(
             sub_frame,
-            text="  Game DB: Loading  ",
-            font=ctk.CTkFont(family=FONT_UI, size=11, weight="bold"),
-            text_color="#FFCB62",
-            fg_color="#4B4330",
-            corner_radius=8,
+            fg_color="transparent",
+            corner_radius=0,
         )
         self.status_badge.grid(row=0, column=1, sticky="e", padx=(8, 0))
+        self.status_badge.grid_columnconfigure(1, weight=1)
+
+        self.status_badge_dot = ctk.CTkFrame(
+            self.status_badge,
+            width=_STATUS_INDICATOR_SIZE,
+            height=_STATUS_INDICATOR_SIZE,
+            fg_color=_STATUS_INDICATOR_LOADING,
+            corner_radius=_STATUS_INDICATOR_SIZE // 2,
+        )
+        self.status_badge_dot.grid(row=0, column=0, padx=(0, 8), sticky="w")
+
+        self.status_badge_label = ctk.CTkLabel(
+            self.status_badge,
+            text="Game DB",
+            font=ctk.CTkFont(family=FONT_UI, size=12, weight="bold"),
+            text_color=_STATUS_TEXT,
+            anchor="w",
+        )
+        self.status_badge_label.grid(row=0, column=1, sticky="w")
+        self._set_status_badge_state("Game DB", _STATUS_INDICATOR_LOADING, pulse=True)
 
         # Separator line
         sep = ctk.CTkFrame(hdr, height=1, fg_color="#4A5361", corner_radius=0)
@@ -2045,7 +2146,7 @@ class OptiManagerApp:
     def _build_scan_row(self):
         row = ctk.CTkFrame(self.root, fg_color=_SURFACE, corner_radius=0)
         row.grid(row=1, column=0, sticky="ew", padx=0, pady=0)
-        row.grid_columnconfigure(1, weight=1)
+        row.grid_columnconfigure(2, weight=1)
         self.scan_row = row
 
         sec_lbl = ctk.CTkLabel(
@@ -2054,7 +2155,7 @@ class OptiManagerApp:
             font=ctk.CTkFont(family=FONT_HEADING, size=12, weight="bold"),
             text_color="#F1F5F9",
         )
-        sec_lbl.grid(row=0, column=0, padx=(20, 10), pady=12, sticky="w")
+        sec_lbl.grid(row=0, column=0, padx=(_CONTENT_SIDE_PAD, 10), pady=(8, 8), sticky="w")
 
         self.btn_select_folder = ctk.CTkButton(
             row,
@@ -2062,23 +2163,55 @@ class OptiManagerApp:
             width=110,
             height=32,
             corner_radius=8,
-            fg_color=_ACCENT,
-            hover_color=_ACCENT_HOVER,
-            text_color="#0B121A",
+            fg_color=_BROWSE_BUTTON,
+            hover_color=_BROWSE_BUTTON_HOVER,
+            text_color="#F1F5F9",
             font=ctk.CTkFont(family=FONT_UI, size=11, weight="bold"),
             command=self.select_game_folder,
         )
-        self.btn_select_folder.grid(row=0, column=1, padx=4, pady=12, sticky="w")
+        self.btn_select_folder.grid(row=0, column=1, padx=4, pady=(8, 8), sticky="w")
 
-        self.lbl_game_path = ctk.CTkLabel(
+        supported_games_meta = ctk.CTkFrame(row, fg_color="transparent", corner_radius=0)
+        supported_games_meta.grid(row=0, column=3, padx=(8, _SCAN_META_RIGHT_INSET), pady=(8, 8), sticky="e")
+
+        self.lbl_supported_games_label = ctk.CTkLabel(
+            supported_games_meta,
+            text="Supported Games:",
+            width=self._meta_label_width,
+            font=ctk.CTkFont(family=FONT_UI, size=12, weight="bold"),
+            text_color=_SECTION_LABEL_TEXT,
+            anchor="e",
+            justify="right",
+        )
+        self.lbl_supported_games_label.grid(row=0, column=0, padx=(0, _META_VALUE_GAP), sticky="e")
+
+        self.lbl_supported_games_value = ctk.CTkLabel(
+            supported_games_meta,
+            text="",
+            font=ctk.CTkFont(family=FONT_UI, size=12, weight="bold"),
+            text_color=_SECTION_LABEL_TEXT,
+            anchor="e",
+            justify="right",
+        )
+        self.lbl_supported_games_value.grid(row=0, column=1, sticky="e")
+
+        self.lbl_scan_status = ctk.CTkLabel(
             row,
             text="",
             font=ctk.CTkFont(family=FONT_UI, size=11),
-            text_color="#AEB9C8",
+            text_color=_SCAN_STATUS_TEXT,
             anchor="w",
+            justify="left",
         )
-        self.lbl_game_path.place(x=0, rely=0.5, anchor="w")
-        self.root.after(0, self._align_supported_games_count_label)
+        self.lbl_scan_status.grid(
+            row=1,
+            column=0,
+            columnspan=4,
+            padx=(_CONTENT_SIDE_PAD, _SCAN_META_RIGHT_INSET),
+            pady=(0, 10),
+            sticky="w",
+        )
+        self.lbl_scan_status.grid_remove()
 
     # -- Grid area (poster cards) -----------------------------------------
 
@@ -2089,37 +2222,30 @@ class OptiManagerApp:
         wrapper.grid_columnconfigure(0, weight=1)
 
         header_row = ctk.CTkFrame(wrapper, fg_color="transparent", corner_radius=0)
-        header_row.grid(row=0, column=0, padx=20, pady=(6, 6), sticky="ew")
+        header_row.grid(row=0, column=0, padx=(_CONTENT_SIDE_PAD, _CONTENT_SIDE_PAD), pady=(6, 6), sticky="ew")
         header_row.grid_columnconfigure(1, weight=1)
 
-        sec_lbl = ctk.CTkLabel(
-            header_row,
-            text="2. Supported Games",
-            font=ctk.CTkFont(family=FONT_HEADING, size=12, weight="bold"),
-            text_color="#F1F5F9",
-        )
-        sec_lbl.grid(row=0, column=0, sticky="w")
-
         selected_header_row = ctk.CTkFrame(header_row, fg_color="transparent", corner_radius=0)
-        selected_header_row.grid(row=0, column=1, padx=(8, 5), pady=(1, 0), sticky="e")
+        selected_header_row.grid(row=0, column=1, padx=(8, _META_RIGHT_PAD), pady=(1, 0), sticky="e")
 
         label_text, game_name = self._get_selected_game_header_parts()
 
         self.lbl_selected_game_header_label = ctk.CTkLabel(
             selected_header_row,
             text=label_text,
-            font=ctk.CTkFont(family=FONT_UI, size=12),
-            text_color="#AEB9C8",
+            width=self._meta_label_width,
+            font=ctk.CTkFont(family=FONT_UI, size=12, weight="bold"),
+            text_color=_SECTION_LABEL_TEXT,
             anchor="e",
             justify="right",
         )
-        self.lbl_selected_game_header_label.grid(row=0, column=0, sticky="e")
+        self.lbl_selected_game_header_label.grid(row=0, column=0, padx=(0, _META_VALUE_GAP), sticky="e")
 
         self.lbl_selected_game_header = ctk.CTkLabel(
             selected_header_row,
             text=game_name,
             font=ctk.CTkFont(family=FONT_UI, size=12, weight="bold"),
-            text_color=_ACCENT_SUCCESS,
+            text_color=_SELECTED_GAME_HIGHLIGHT,
             anchor="e",
             justify="right",
         )
@@ -2273,45 +2399,41 @@ class OptiManagerApp:
             logging.debug("Could not adjust information textbox position: %s", exc)
 
     # ------------------------------------------------------------------
-    # Status badge
+    # Status indicator
     # ------------------------------------------------------------------
 
     def _update_sheet_status(self):
         if self.multi_gpu_blocked:
-            self.status_badge.configure(
-                text="  GPU Config: Unsupported  " if not USE_KOREAN else "  GPU 구성: 미지원  ",
-                text_color="#FF8A8A",
-                fg_color="#4A2F34",
+            self._set_status_badge_state(
+                "GPU Config" if not USE_KOREAN else "GPU 구성",
+                _STATUS_INDICATOR_OFFLINE,
             )
             self.root.after(0, self._align_supported_games_count_label)
             return
         if self._gpu_selection_pending:
-            self.status_badge.configure(
-                text="  GPU Selection Required  " if not USE_KOREAN else "  GPU 선택 필요  ",
-                text_color="#FFCB62",
-                fg_color="#4B4330",
+            self._set_status_badge_state(
+                "GPU Select" if not USE_KOREAN else "GPU 선택",
+                _STATUS_INDICATOR_WARNING,
             )
             self.root.after(0, self._align_supported_games_count_label)
             return
         if self.sheet_loading:
-            self.status_badge.configure(
-                text="  Game DB: Loading  ",
-                text_color="#FFCB62",
-                fg_color="#4B4330",
+            self._set_status_badge_state(
+                "Game DB",
+                _STATUS_INDICATOR_LOADING,
+                pulse=True,
             )
             self.root.after(0, self._align_supported_games_count_label)
             return
         if self.sheet_status:
-            self.status_badge.configure(
-                text="  Game DB: Online  ",
-                text_color="#7EE1AA",
-                fg_color="#244336",
+            self._set_status_badge_state(
+                "Game DB",
+                _STATUS_INDICATOR_ONLINE,
             )
         else:
-            self.status_badge.configure(
-                text="  Game DB: Offline  ",
-                text_color="#FF8A8A",
-                fg_color="#4A2F34",
+            self._set_status_badge_state(
+                "Game DB",
+                _STATUS_INDICATOR_OFFLINE,
             )
         self.root.after(0, self._align_supported_games_count_label)
 
@@ -3185,7 +3307,8 @@ class OptiManagerApp:
         if not self.game_folder:
             return
 
-        self.lbl_game_path.configure(text="Scanning...", text_color="#F1F5F9")
+        self._set_supported_games_value(0)
+        self._set_scan_status_message("Scanning...", "#F1F5F9")
         self.found_exe_list = []
         self._clear_cards()
         self._configure_card_columns(self._get_dynamic_column_count())
@@ -3303,11 +3426,8 @@ class OptiManagerApp:
         self._auto_scan_active = False
         self.btn_select_folder.configure(state="normal")
         count = len(self.found_exe_list)
-        self.lbl_game_path.configure(
-            text=f"Supported Games: {count}",
-            text_color="#F1F5F9",
-        )
-        self.root.after(0, self._align_supported_games_count_label)
+        self._set_supported_games_value(count)
+        self._set_scan_status_message("")
         if count > 0:
             self._set_information_text("Select a game to view information.")
         elif not is_auto:
@@ -3341,11 +3461,7 @@ class OptiManagerApp:
         # Expand scroll region so newly added row is reachable.
         self._schedule_games_scrollregion_refresh()
 
-        self.lbl_game_path.configure(
-            text=f"Supported Games: {len(self.found_exe_list)}",
-            text_color="#F1F5F9",
-        )
-        self.root.after(0, self._align_supported_games_count_label)
+        self._set_supported_games_value(len(self.found_exe_list))
 
     # ------------------------------------------------------------------
     # Install
