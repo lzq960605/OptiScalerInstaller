@@ -460,6 +460,12 @@ _BROWSE_BUTTON = "#5B6574"
 _BROWSE_BUTTON_HOVER = "#6A7587"
 _POPUP_OK_BUTTON = "#8A95A3"
 _POPUP_OK_BUTTON_HOVER = "#99A4B1"
+_INSTALL_BUTTON = "#D6AA43"
+_INSTALL_BUTTON_HOVER = "#E2BA58"
+_INSTALL_BUTTON_BORDER = "#F0D082"
+_INSTALL_BUTTON_DISABLED = "#4B4338"
+_INSTALL_BUTTON_BORDER_DISABLED = "#5B5246"
+_INSTALL_BUTTON_TEXT = "#0B121A"
 _STATUS_TEXT = "#C5CFDB"
 _SECTION_LABEL_TEXT = "#C5CFDB"
 _SELECTED_GAME_HIGHLIGHT = "#FFCB62"
@@ -1074,7 +1080,9 @@ class OptiManagerApp:
         self.apply_btn.configure(
             state="normal" if can_install else "disabled",
             text="Install" if not self.install_in_progress else "Installing...",
-            fg_color=_ACCENT if can_install else _ACCENT_DISABLED,
+            fg_color=_INSTALL_BUTTON if can_install else _INSTALL_BUTTON_DISABLED,
+            hover_color=_INSTALL_BUTTON_HOVER if can_install else _INSTALL_BUTTON_DISABLED,
+            border_color=_INSTALL_BUTTON_BORDER if can_install else _INSTALL_BUTTON_BORDER_DISABLED,
         )
 
     # ------------------------------------------------------------------
@@ -2326,9 +2334,11 @@ class OptiManagerApp:
             width=104,
             height=87,
             corner_radius=10,
-            fg_color=_ACCENT_DISABLED,
-            hover_color=_ACCENT_HOVER,
-            text_color="#000000",
+            fg_color=_INSTALL_BUTTON_DISABLED,
+            hover_color=_INSTALL_BUTTON_DISABLED,
+            text_color=_INSTALL_BUTTON_TEXT,
+            border_width=1,
+            border_color=_INSTALL_BUTTON_BORDER_DISABLED,
             font=ctk.CTkFont(family=FONT_UI, size=14, weight="bold"),
             state="disabled",
             command=self.apply_optiscaler,
@@ -3518,7 +3528,13 @@ class OptiManagerApp:
         resolved_dll_name = self.install_precheck_dll_name
 
         self.install_in_progress = True
-        self.apply_btn.configure(state="disabled", text="Installing...", fg_color=_ACCENT_DISABLED)
+        self.apply_btn.configure(
+            state="disabled",
+            text="Installing...",
+            fg_color=_INSTALL_BUTTON_DISABLED,
+            hover_color=_INSTALL_BUTTON_DISABLED,
+            border_color=_INSTALL_BUTTON_BORDER_DISABLED,
+        )
 
         self._task_executor.submit(self._apply_optiscaler_worker, game_data, source_archive, resolved_dll_name)
 
