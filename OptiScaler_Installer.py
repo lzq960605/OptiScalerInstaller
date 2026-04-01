@@ -66,7 +66,7 @@ except ModuleNotFoundError as e:
 import rtss_notice
 
  # Application Version
-APP_VERSION = "0.2.2"
+APP_VERSION = "0.2.3"
 # Install flow supports up to two detected GPUs. Dual-GPU requires explicit user selection.
 MAX_SUPPORTED_GPU_COUNT = 2
 
