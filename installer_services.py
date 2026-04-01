@@ -10,7 +10,7 @@ from ctypes import wintypes
 from pathlib import Path
 from urllib.parse import urlparse
 
-from network_utils import build_retry_session
+from network_utils import get_shared_retry_session
 from process_utils import subprocess_no_window_kwargs
 
 try:
@@ -38,7 +38,7 @@ OPTISCALER_LEGACY_REMOVE_NAMES = {
 }
 OPTISCALER_PROXY_FALLBACK_NAMES = ("winmm.dll", "version.dll")
 
-_file_session = build_retry_session()
+_file_session = get_shared_retry_session()
 
 
 def _normalize_rel_path(rel_path: str) -> str:

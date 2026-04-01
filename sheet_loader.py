@@ -5,10 +5,10 @@ import time
 import unicodedata
 from typing import Optional
 
-from network_utils import build_retry_session
+from network_utils import get_shared_retry_session
 
 
-_file_session = build_retry_session()
+_file_session = get_shared_retry_session()
 
 
 def _split_match_files(match_text: str) -> list[str]:
