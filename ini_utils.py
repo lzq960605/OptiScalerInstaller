@@ -65,7 +65,31 @@ def _read_ini_text_with_fallback(path: Path, logger=None) -> tuple[str, str]:
 
 
 def _write_ini_text_with_encoding(path: Path, text: str, encoding: str) -> None:
-    path.write_text(text, encoding=encoding)
+    # Preserve the line endings we already reconstructed from the INI file.
+    # The default text-mode newline translation on Windows can turn "\r\n"
+    # into "\r\r\n", which shows up as blank lines between every entry.
+    with path.open("w", encoding=encoding, newline="") as handle:
+        handle.write(text)
+
+
+def _get_ini_preferred_newline(text: str) -> str:
+    if "\r\n" in text:
+        return "\r\n"
+    if "\n" in text:
+        return "\n"
+    if "\r" in text:
+        return "\r"
+    return "\r\n" if os.name == "nt" else "\n"
+
+
+def _get_line_ending(line: str, default: str = "") -> str:
+    if line.endswith("\r\n"):
+        return "\r\n"
+    if line.endswith("\n"):
+        return "\n"
+    if line.endswith("\r"):
+        return "\r"
+    return default
 
 
 def apply_ini_settings(ini_path, settings, force_frame_generation=False, logger=None):
@@ -455,6 +479,7 @@ def _upsert_ini_entries(ini_path: Path, section_map: dict, logger=None):
         return
 
     lines = text.splitlines(keepends=True)
+    preferred_newline = _get_ini_preferred_newline(text)
     section_pattern = re.compile(r"^\s*\[([^\]]+)\]")
 
     def _norm_section(s):
@@ -497,7 +522,7 @@ def _upsert_ini_entries(ini_path: Path, section_map: dict, logger=None):
             for key, value in kvs.items():
                 found = _find_key_in_range(key, 0, len(lines))
                 if found is not None:
-                    ending = "\n" if lines[found].endswith("\n") else ""
+                    ending = _get_line_ending(lines[found], preferred_newline)
                     previous_value = lines[found].strip()
                     lines[found] = f"{key}={value}{ending}"
                     modified = True
@@ -510,7 +535,7 @@ def _upsert_ini_entries(ini_path: Path, section_map: dict, logger=None):
                             ini_path,
                         )
                 else:
-                    lines.insert(insert_pos, f"{key}={value}\n")
+                    lines.insert(insert_pos, f"{key}={value}{preferred_newline}")
                     insert_pos += 1
                     modified = True
                     if logger:
@@ -523,7 +548,7 @@ def _upsert_ini_entries(ini_path: Path, section_map: dict, logger=None):
             for key, value in kvs.items():
                 found = _find_key_in_range(key, start, end)
                 if found is not None:
-                    ending = "\n" if lines[found].endswith("\n") else ""
+                    ending = _get_line_ending(lines[found], preferred_newline)
                     prefix = re.match(r"^(\s*)", lines[found]).group(1)
                     previous_value = lines[found].strip()
                     lines[found] = f"{prefix}{key}={value}{ending}"
@@ -538,19 +563,19 @@ def _upsert_ini_entries(ini_path: Path, section_map: dict, logger=None):
                             ini_path,
                         )
                 else:
-                    lines.insert(insert_at, f"{key}={value}\n")
+                    lines.insert(insert_at, f"{key}={value}{preferred_newline}")
                     insert_at += 1
                     modified = True
                     if logger:
                         logger.info("Engine.ini add [%s] %s=%s in %s", sec, key, value, ini_path)
         else:
-            if lines and not lines[-1].endswith("\n"):
-                lines[-1] = lines[-1] + "\n"
-            lines.append(f"[{sec}]\n")
+            if lines and not _get_line_ending(lines[-1]):
+                lines[-1] = lines[-1] + preferred_newline
+            lines.append(f"[{sec}]{preferred_newline}")
             if logger:
                 logger.info("Engine.ini add section [%s] in %s", sec, ini_path)
             for key, value in kvs.items():
-                lines.append(f"{key}={value}\n")
+                lines.append(f"{key}={value}{preferred_newline}")
                 if logger:
                     logger.info("Engine.ini add [%s] %s=%s in %s", sec, key, value, ini_path)
             modified = True
