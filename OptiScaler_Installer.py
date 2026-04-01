@@ -616,6 +616,7 @@ class OptiManagerApp:
         self._render_generation = 0
         self._image_queue_after_id = None
         self._games_scrollregion_after_id = None
+        self._games_viewport_after_id = None
         self._overflow_fit_after_id = None
         self._initial_image_pass = True
         self._scan_in_progress = False
@@ -1121,6 +1122,12 @@ class OptiManagerApp:
             if self._games_scrollregion_after_id is not None:
                 self.root.after_cancel(self._games_scrollregion_after_id)
                 self._games_scrollregion_after_id = None
+        except Exception:
+            pass
+        try:
+            if self._games_viewport_after_id is not None:
+                self.root.after_cancel(self._games_viewport_after_id)
+                self._games_viewport_after_id = None
         except Exception:
             pass
         try:
@@ -2293,6 +2300,7 @@ class OptiManagerApp:
         self.games_scroll.bind("<Configure>", self._on_games_area_resize)
         try:
             canvas = getattr(self.games_scroll, "_parent_canvas", None)
+            scrollbar = getattr(self.games_scroll, "_scrollbar", None)
             if canvas is not None:
                 canvas.bind("<MouseWheel>", self._on_games_scroll, add="+")
                 canvas.bind("<Button-4>", self._on_games_scroll, add="+")
@@ -2300,6 +2308,8 @@ class OptiManagerApp:
                 canvas.bind("<ButtonRelease-1>", self._on_games_scroll, add="+")
                 # Also reflow columns when the inner canvas itself resizes.
                 canvas.bind("<Configure>", self._on_games_area_resize, add="+")
+            if canvas is not None and scrollbar is not None:
+                scrollbar.configure(command=self._on_games_scrollbar_command)
         except Exception:
             logging.debug("Failed to bind scroll events for image priority updates")
 
@@ -2787,6 +2797,30 @@ class OptiManagerApp:
         if not self._resize_in_progress:
             self._pump_image_jobs()
 
+    def _schedule_games_viewport_update(self, delay_ms: int = 30):
+        try:
+            if self._games_viewport_after_id is not None:
+                self.root.after_cancel(self._games_viewport_after_id)
+            self._games_viewport_after_id = self.root.after(max(0, int(delay_ms)), self._run_games_viewport_update)
+        except Exception:
+            self._games_viewport_after_id = None
+
+    def _run_games_viewport_update(self):
+        self._games_viewport_after_id = None
+        self._pump_image_jobs()
+
+    def _on_games_scrollbar_command(self, *args):
+        canvas = getattr(self.games_scroll, "_parent_canvas", None)
+        if canvas is None or not args:
+            return
+
+        try:
+            canvas.yview(*args)
+        except Exception:
+            return
+
+        self._schedule_games_viewport_update()
+
     def _on_games_scroll(self, _event=None):
         # Handle wheel scrolling explicitly so rows beyond 2 are reachable.
         event = _event
@@ -2804,7 +2838,7 @@ class OptiManagerApp:
                 canvas.yview_scroll(step, "units")
 
         # Re-evaluate queue ordering when viewport changes.
-        self.root.after(30, self._pump_image_jobs)
+        self._schedule_games_viewport_update()
 
     def _rerender_cards_for_resize(self):
         self._resize_after_id = None
