@@ -258,6 +258,9 @@ GRID_W = (CARD_W * GRID_COLS) + (CARD_H_SPACING * GRID_COLS) + (GRID_SIDE_PADDIN
 GRID_H = CARD_H * GRID_ROWS_VISIBLE
 WINDOW_W = GRID_W
 WINDOW_H = 710
+WINDOW_MIN_W = 360
+WINDOW_MIN_H = 420
+_SM_CONVERTIBLESLATEMODE = 0x2003
 LOCAL_APPDATA_DIR = Path(os.environ.get("LOCALAPPDATA") or Path(tempfile.gettempdir()))
 APP_CACHE_DIR = LOCAL_APPDATA_DIR / "OptiScalerInstaller"
 OPTISCALER_CACHE_DIR = APP_CACHE_DIR / "cache" / "optiscaler"
@@ -268,6 +271,37 @@ DEFAULT_POSTER_CANDIDATES = [
     ASSETS_DIR / "default_poster.jpg",
     ASSETS_DIR / "default_poster.png",
 ]
+
+
+def _is_windows_slate_mode() -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        return int(ctypes.windll.user32.GetSystemMetrics(_SM_CONVERTIBLESLATEMODE)) == 0
+    except Exception:
+        logging.debug("[APP] Failed to read SM_CONVERTIBLESLATEMODE", exc_info=True)
+        return False
+
+
+def _build_centered_window_geometry(screen_w: int, screen_h: int, width: int, height: int) -> str:
+    x = max(0, (max(1, int(screen_w)) - max(1, int(width))) // 2)
+    y = max(0, (max(1, int(screen_h)) - max(1, int(height))) // 2)
+    return f"{max(1, int(width))}x{max(1, int(height))}+{x}+{y}"
+
+
+def _should_apply_umpc_window_workaround(screen_w: int, screen_h: int, target_w: int, target_h: int) -> bool:
+    if not _is_windows_slate_mode():
+        return False
+
+    width_ratio = max(1, int(target_w)) / max(1, int(screen_w))
+    height_ratio = max(1, int(target_h)) / max(1, int(screen_h))
+    return width_ratio >= 0.90 or height_ratio >= 0.84 or max(1, int(screen_h)) <= WINDOW_H + 140
+
+
+def _get_umpc_startup_window_size(screen_w: int, screen_h: int, target_w: int, target_h: int) -> tuple[int, int]:
+    compact_w = min(int(target_w), max(WINDOW_MIN_W, int(screen_w) - max(96, int(screen_w) // 10)))
+    compact_h = min(int(target_h), max(WINDOW_MIN_H, int(screen_h) - max(140, int(screen_h) // 6)))
+    return max(WINDOW_MIN_W, compact_w), max(WINDOW_MIN_H, compact_h)
 DEFAULT_POSTER_PATH = next((p for p in DEFAULT_POSTER_CANDIDATES if p.exists()), DEFAULT_POSTER_CANDIDATES[0])
 IMAGE_TIMEOUT_SECONDS = 10
 IMAGE_MAX_RETRIES = 3
@@ -449,15 +483,36 @@ class OptiManagerApp:
         self.root.title(f"OptiScaler Installer (v{APP_VERSION})")
         screen_w = max(1, int(self.root.winfo_screenwidth() or WINDOW_W))
         screen_h = max(1, int(self.root.winfo_screenheight() or WINDOW_H))
-        target_w = min(WINDOW_W, max(360, screen_w - 40))
-        target_h = min(WINDOW_H, max(420, screen_h - 80))
+        target_w = min(WINDOW_W, max(WINDOW_MIN_W, screen_w - 40))
+        target_h = min(WINDOW_H, max(WINDOW_MIN_H, screen_h - 80))
+        self._startup_window_workaround_active = _should_apply_umpc_window_workaround(
+            screen_w,
+            screen_h,
+            target_w,
+            target_h,
+        )
+        if self._startup_window_workaround_active:
+            target_w, target_h = _get_umpc_startup_window_size(screen_w, screen_h, target_w, target_h)
+        self._startup_window_width = target_w
+        self._startup_window_height = target_h
 
-        self.root.geometry(f"{target_w}x{target_h}")
+        if self._startup_window_workaround_active:
+            self.root.geometry(_build_centered_window_geometry(screen_w, screen_h, target_w, target_h))
+        else:
+            self.root.geometry(f"{target_w}x{target_h}")
         self.root.minsize(target_w, target_h)
         self.root.update_idletasks()
         self.root.state("normal")
         self.root.overrideredirect(False)
         self.root.resizable(True, True)
+        if self._startup_window_workaround_active:
+            logging.info(
+                "[APP] Enabling UMPC startup window workaround (screen=%sx%s, target=%sx%s)",
+                screen_w,
+                screen_h,
+                target_w,
+                target_h,
+            )
 
         self.game_folder = ""
         self.opti_source_archive = ""
@@ -534,7 +589,48 @@ class OptiManagerApp:
             logging.exception("Failed to submit GPU info fetch task")
         self.root.bind("<Configure>", self._on_root_resize)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        if self._startup_window_workaround_active:
+            self.root.after_idle(self._apply_startup_window_workaround)
+            self.root.after(220, self._apply_startup_window_workaround)
         self.root.after(250, self._capture_startup_width)
+
+    def _apply_startup_window_workaround(self):
+        if not getattr(self, "_startup_window_workaround_active", False):
+            return
+
+        try:
+            screen_w = max(1, int(self.root.winfo_screenwidth() or self._startup_window_width))
+            screen_h = max(1, int(self.root.winfo_screenheight() or self._startup_window_height))
+            current_w = max(1, int(self.root.winfo_width() or self._startup_window_width))
+            current_h = max(1, int(self.root.winfo_height() or self._startup_window_height))
+            state = str(self.root.state() or "").strip().lower()
+            is_effectively_maximized = (
+                state == "zoomed"
+                or current_w >= screen_w - 24
+                or current_h >= screen_h - 24
+            )
+            if not is_effectively_maximized:
+                return
+
+            self.root.overrideredirect(False)
+            self.root.state("normal")
+            self.root.deiconify()
+            self.root.geometry(
+                _build_centered_window_geometry(
+                    screen_w,
+                    screen_h,
+                    self._startup_window_width,
+                    self._startup_window_height,
+                )
+            )
+            self.root.update_idletasks()
+            logging.info(
+                "[APP] Restored startup window from maximized state to %sx%s",
+                self._startup_window_width,
+                self._startup_window_height,
+            )
+        except Exception:
+            logging.debug("[APP] Failed to apply UMPC startup window workaround", exc_info=True)
 
     def _show_game_selection_popup(self, message_text: str, on_confirm: callable = None, is_after_popup: bool = False):
         popup = create_modal_popup(self.root, "Installer Notice", _SURFACE)
