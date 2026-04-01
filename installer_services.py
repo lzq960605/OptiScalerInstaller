@@ -316,6 +316,27 @@ def extract_archive(archive_path, target_path, logger=None):
     target_dir = Path(target_path)
     target_dir.mkdir(parents=True, exist_ok=True)
     extractor_errors = []
+    tar_exe = shutil.which("tar")
+
+    def _extract_with_tar():
+        listing = subprocess.run(
+            [tar_exe, "-tf", archive_path],
+            capture_output=True,
+            text=True,
+            check=True,
+            **subprocess_no_window_kwargs(),
+        )
+        for member_name in listing.stdout.splitlines():
+            if not _is_archive_member_path_safe(target_dir, member_name):
+                raise ValueError(f"Unsafe archive entry path: {member_name}")
+        subprocess.run(
+            [tar_exe, "-xf", archive_path, "-C", target_path],
+            check=True,
+            **subprocess_no_window_kwargs(),
+        )
+        if logger:
+            logger.info(f"Extracted archive {archive_path} to {target_path} using tar.exe")
+
     try:
         if ext == ".zip":
             try:
@@ -335,43 +356,72 @@ def extract_archive(archive_path, target_path, logger=None):
                 else:
                     logging.warning("Python zipfile extraction failed, trying tar fallback: %s", e)
 
-        if ext == ".7z" and py7zr is not None:
-            try:
-                with py7zr.SevenZipFile(archive_path, "r") as archive:
-                    for member_name in archive.getnames():
-                        if not _is_archive_member_path_safe(target_dir, member_name):
-                            raise ValueError(f"Unsafe archive entry path: {member_name}")
-                    archive.extractall(path=target_path)
-                if logger:
-                    logger.info(f"Extracted .7z archive {archive_path} to {target_path} using py7zr")
-                return
-            except Exception as e:
-                extractor_errors.append(f"py7zr: {e}")
-                if logger:
-                    logger.warning(f"py7zr extraction failed ({archive_path}), trying tar fallback: {e}")
-                else:
-                    logging.warning("py7zr extraction failed (%s), trying tar fallback: %s", archive_path, e)
+            if tar_exe:
+                try:
+                    _extract_with_tar()
+                    return
+                except subprocess.CalledProcessError as e:
+                    extractor_errors.append(f"tar: {e}")
+                    if logger:
+                        logger.warning(f"tar.exe extraction failed ({archive_path}), falling back: {e}")
+                    else:
+                        logging.warning("tar.exe extraction failed (%s), falling back: %s", archive_path, e)
+            raise RuntimeError(f"Failed to extract .zip file: {archive_path}")
 
-        tar_exe = shutil.which("tar")
+        if ext == ".7z":
+            if tar_exe:
+                # Prefer tar/libarchive first for .7z because some filter chains
+                # (for example BCJ2) are supported there but not by py7zr.
+                try:
+                    _extract_with_tar()
+                    return
+                except subprocess.CalledProcessError as e:
+                    extractor_errors.append(f"tar: {e}")
+                    if py7zr is not None:
+                        if logger:
+                            logger.warning(f"tar.exe extraction failed ({archive_path}), trying py7zr fallback: {e}")
+                        else:
+                            logging.warning("tar.exe extraction failed (%s), trying py7zr fallback: %s", archive_path, e)
+                    elif logger:
+                        logger.warning(f"tar.exe extraction failed ({archive_path}) and no py7zr fallback is available: {e}")
+                    else:
+                        logging.warning(
+                            "tar.exe extraction failed (%s) and no py7zr fallback is available: %s",
+                            archive_path,
+                            e,
+                        )
+
+            if py7zr is not None:
+                try:
+                    with py7zr.SevenZipFile(archive_path, "r") as archive:
+                        for member_name in archive.getnames():
+                            if not _is_archive_member_path_safe(target_dir, member_name):
+                                raise ValueError(f"Unsafe archive entry path: {member_name}")
+                        archive.extractall(path=target_path)
+                    if logger:
+                        logger.info(f"Extracted .7z archive {archive_path} to {target_path} using py7zr")
+                    return
+                except Exception as e:
+                    extractor_errors.append(f"py7zr: {e}")
+                    if tar_exe:
+                        if logger:
+                            logger.warning(f"py7zr extraction failed ({archive_path}) after tar fallback: {e}")
+                        else:
+                            logging.warning("py7zr extraction failed (%s) after tar fallback: %s", archive_path, e)
+                    elif logger:
+                        logger.warning(f"py7zr extraction failed ({archive_path}): {e}")
+                    else:
+                        logging.warning("py7zr extraction failed (%s): %s", archive_path, e)
+
+            reasons = "; ".join(extractor_errors) if extractor_errors else "no extractor attempted"
+            raise RuntimeError(
+                "Cannot extract .7z archive. Install the optional 'py7zr' dependency or provide "
+                f"a tar.exe build with 7z support. Details: {reasons}"
+            )
+
         if tar_exe:
             try:
-                listing = subprocess.run(
-                    [tar_exe, "-tf", archive_path],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                    **subprocess_no_window_kwargs(),
-                )
-                for member_name in listing.stdout.splitlines():
-                    if not _is_archive_member_path_safe(target_dir, member_name):
-                        raise ValueError(f"Unsafe archive entry path: {member_name}")
-                subprocess.run(
-                    [tar_exe, "-xf", archive_path, "-C", target_path],
-                    check=True,
-                    **subprocess_no_window_kwargs(),
-                )
-                if logger:
-                    logger.info(f"Extracted archive {archive_path} to {target_path} using tar.exe")
+                _extract_with_tar()
                 return
             except subprocess.CalledProcessError as e:
                 extractor_errors.append(f"tar: {e}")
@@ -380,14 +430,6 @@ def extract_archive(archive_path, target_path, logger=None):
                 else:
                     logging.warning("tar.exe extraction failed (%s), falling back: %s", archive_path, e)
 
-        if ext == ".zip":
-            raise RuntimeError(f"Failed to extract .zip file: {archive_path}")
-        if ext == ".7z":
-            reasons = "; ".join(extractor_errors) if extractor_errors else "no extractor attempted"
-            raise RuntimeError(
-                "Cannot extract .7z archive. Install the optional 'py7zr' dependency or provide "
-                f"a tar.exe build with 7z support. Details: {reasons}"
-            )
         raise ValueError(f"Unsupported archive format: {ext}")
     except Exception as e:
         if logger:
