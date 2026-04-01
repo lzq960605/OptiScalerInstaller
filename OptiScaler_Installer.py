@@ -484,6 +484,8 @@ _META_VALUE_GAP = 8
 _LINK_ACTIVE = "#7DD3FC"
 _LINK_HOVER = "#38BDF8"
 _CARD_BG = "#181B21"
+_CARD_TITLE_OVERLAY_BG = "#243447"
+_CARD_TITLE_OVERLAY_TEXT = "#FFFFFF"
 _SURFACE = "#2A2E35"
 _PANEL = "#1E2128"
 _ACCENT_DISABLED = "#3A414C"
@@ -2903,8 +2905,8 @@ class OptiManagerApp:
             card,
             text=game["display"],
             font=ctk.CTkFont(family=FONT_UI, size=11, weight="bold"),
-            text_color="#F1F5F9",
-            fg_color="#2D3B4C",
+            text_color=_CARD_TITLE_OVERLAY_TEXT,
+            fg_color=_CARD_TITLE_OVERLAY_BG,
             corner_radius=0,
             wraplength=CARD_W - 10,
             justify="center",
