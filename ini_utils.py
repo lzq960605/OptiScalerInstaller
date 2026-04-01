@@ -1,6 +1,8 @@
+import codecs
 import csv
 import io
 import logging
+import locale
 import os
 import re
 import stat
@@ -13,6 +15,57 @@ from network_utils import get_shared_retry_session
 
 
 _file_session = get_shared_retry_session()
+
+
+_INI_BOM_ENCODINGS = (
+    (codecs.BOM_UTF8, "utf-8-sig"),
+    (codecs.BOM_UTF32_LE, "utf-32"),
+    (codecs.BOM_UTF32_BE, "utf-32"),
+    (codecs.BOM_UTF16_LE, "utf-16"),
+    (codecs.BOM_UTF16_BE, "utf-16"),
+)
+
+
+def _iter_ini_fallback_encodings():
+    seen = set()
+    for encoding in ("utf-8", locale.getpreferredencoding(False), "mbcs" if os.name == "nt" else None, "cp949"):
+        normalized = str(encoding or "").strip().lower()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        yield encoding
+
+
+def _read_ini_text_with_fallback(path: Path, logger=None) -> tuple[str, str]:
+    raw = path.read_bytes()
+    for bom, encoding in _INI_BOM_ENCODINGS:
+        if raw.startswith(bom):
+            text = raw.decode(encoding)
+            if logger:
+                logger.info("Read INI %s using BOM-detected encoding %s", path, encoding)
+            elif encoding != "utf-8":
+                logging.info("Read INI %s using BOM-detected encoding %s", path, encoding)
+            return text, encoding
+
+    last_error = None
+    for encoding in _iter_ini_fallback_encodings():
+        try:
+            text = raw.decode(encoding)
+            if logger and encoding != "utf-8":
+                logger.info("Read INI %s using fallback encoding %s", path, encoding)
+            elif encoding != "utf-8":
+                logging.info("Read INI %s using fallback encoding %s", path, encoding)
+            return text, encoding
+        except UnicodeDecodeError as exc:
+            last_error = exc
+
+    if last_error is not None:
+        raise last_error
+    return raw.decode("utf-8"), "utf-8"
+
+
+def _write_ini_text_with_encoding(path: Path, text: str, encoding: str) -> None:
+    path.write_text(text, encoding=encoding)
 
 
 def apply_ini_settings(ini_path, settings, force_frame_generation=False, logger=None):
@@ -47,7 +100,8 @@ def apply_ini_settings(ini_path, settings, force_frame_generation=False, logger=
             unsectioned_targets[_norm(k)] = str(v)
 
     try:
-        lines = p.read_text(encoding="utf-8").splitlines(keepends=True)
+        ini_text, ini_encoding = _read_ini_text_with_fallback(p, logger=logger)
+        lines = ini_text.splitlines(keepends=True)
     except Exception:
         if logger:
             logger.exception("Failed to read INI for in-place update")
@@ -151,8 +205,11 @@ def apply_ini_settings(ini_path, settings, force_frame_generation=False, logger=
                 new_value,
             )
 
+    if not applied:
+        return
+
     try:
-        p.write_text("".join(updated_lines), encoding="utf-8")
+        _write_ini_text_with_encoding(p, "".join(updated_lines), ini_encoding)
     except Exception:
         if logger:
             logger.exception("Failed to write updated INI file")
@@ -383,13 +440,13 @@ def _upsert_ini_entries(ini_path: Path, section_map: dict, logger=None):
             logging.exception("Failed to make INI writable before upsert: %s", ini_path)
 
         try:
-            text = ini_path.read_text(encoding="utf-8")
+            text, ini_encoding = _read_ini_text_with_fallback(ini_path, logger=logger)
         except Exception:
             if logger:
-                logger.exception("Failed to read INI for upsert (will proceed with empty content): %s", ini_path)
+                logger.exception("Failed to read INI for upsert: %s", ini_path)
             else:
-                logging.exception("Failed to read INI for upsert (will proceed with empty content): %s", ini_path)
-            text = ""
+                logging.exception("Failed to read INI for upsert: %s", ini_path)
+            return
     except Exception:
         if logger:
             logger.exception("Unexpected error preparing INI for upsert: %s", ini_path)
@@ -500,7 +557,7 @@ def _upsert_ini_entries(ini_path: Path, section_map: dict, logger=None):
 
     if modified:
         try:
-            ini_path.write_text("".join(lines), encoding="utf-8")
+            _write_ini_text_with_encoding(ini_path, "".join(lines), ini_encoding)
             if logger:
                 logger.info("Upserted INI entries into %s", ini_path)
             else:
