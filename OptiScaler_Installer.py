@@ -121,6 +121,7 @@ def _get_int_env(name: str, default: int = 0) -> int:
 SHEET_ID = os.environ.get("OPTISCALER_SHEET_ID", "")
 SHEET_GID = _get_int_env("OPTISCALER_SHEET_GID", 0)
 DOWNLOAD_LINKS_SHEET_GID = _get_int_env("OPTISCALER_DOWNLOAD_LINKS_SHEET_GID", 0)
+SUPPORTED_GAMES_WIKI_URL = str(os.environ.get("SUPPORTED_GAMES_WIKI_URL", "") or "").strip()
 GPU_VENDOR_DB_GIDS = {
     "intel": _get_int_env("DB_INTEL_GID", SHEET_GID),
     "amd": _get_int_env("DB_AMD_GID", SHEET_GID),
@@ -517,8 +518,8 @@ _CONTENT_SIDE_PAD = 20
 _META_RIGHT_PAD = 5
 _SCAN_META_RIGHT_INSET = _CONTENT_SIDE_PAD + _META_RIGHT_PAD
 _META_VALUE_GAP = 8
-_LINK_ACTIVE = "#7DD3FC"
-_LINK_HOVER = "#38BDF8"
+_LINK_ACTIVE = _SELECTED_GAME_HIGHLIGHT
+_LINK_HOVER = "#FFE08F"
 _CARD_BG = "#181B21"
 _CARD_TITLE_OVERLAY_BG = "#243447"
 _CARD_TITLE_OVERLAY_TEXT = "#FFFFFF"
@@ -661,7 +662,7 @@ class OptiManagerApp:
         self._status_indicator_after_id = None
         self._status_indicator_pulse_visible = True
         self._status_indicator_pulse_colors = (_STATUS_INDICATOR_LOADING, _STATUS_INDICATOR_LOADING_DIM)
-        self._meta_label_width = self._measure_meta_label_width()
+        self._scan_meta_label_width = self._measure_meta_label_width(self._get_supported_games_meta_label_text())
         self.setup_ui()
         # Fetch GPU info asynchronously to avoid blocking startup on slow PowerShell
         try:
@@ -884,11 +885,15 @@ class OptiManagerApp:
 
         return True
 
-    def _measure_meta_label_width(self) -> int:
+    def _get_supported_games_meta_label_text(self) -> str:
+        return "설치된 지원 게임:" if USE_KOREAN else "Installed Supported Games:"
+
+    def _measure_meta_label_width(self, *candidate_texts: str) -> int:
         try:
             meta_font = tkfont.Font(family=FONT_UI, size=12, weight="bold")
-            selected_label = "선택된 게임:" if USE_KOREAN else "Selected Game:"
-            candidates = ("Supported Games:", selected_label)
+            candidates = tuple(text for text in candidate_texts if text)
+            if not candidates:
+                candidates = (self._get_supported_games_meta_label_text(),)
             return max(meta_font.measure(text) for text in candidates) + 2
         except Exception:
             return 120
@@ -901,6 +906,31 @@ class OptiManagerApp:
             return
         display_value = "" if value is None else str(value)
         self.lbl_supported_games_value.configure(text=display_value, text_color=text_color)
+
+    def _set_supported_games_wiki_link_hover(self, hovered: bool) -> None:
+        if not hasattr(self, "lbl_supported_games_wiki_link") or not self.lbl_supported_games_wiki_link.winfo_exists():
+            return
+        if not SUPPORTED_GAMES_WIKI_URL:
+            self.lbl_supported_games_wiki_link.configure(text_color=_STATUS_TEXT)
+            return
+        self.lbl_supported_games_wiki_link.configure(text_color=_LINK_HOVER if hovered else _LINK_ACTIVE)
+
+    def _open_supported_games_wiki(self, _event=None) -> None:
+        wiki_url = SUPPORTED_GAMES_WIKI_URL
+        if not wiki_url:
+            detail = "지원 게임 위키 주소가 설정되지 않았습니다." if USE_KOREAN else "Supported games wiki URL is not configured."
+            title = "알림" if USE_KOREAN else "Notice"
+            messagebox.showinfo(title, detail)
+            return
+
+        try:
+            if not webbrowser.open(wiki_url):
+                raise RuntimeError("webbrowser.open returned False")
+        except Exception:
+            logging.exception("Failed to open supported games wiki URL: %s", wiki_url)
+            detail = "지원 게임 위키를 열지 못했습니다." if USE_KOREAN else "Failed to open the supported games wiki."
+            title = "오류" if USE_KOREAN else "Error"
+            messagebox.showerror(title, detail)
 
     def _set_scan_status_message(self, text: str = "", text_color: str = _SCAN_STATUS_TEXT):
         if not hasattr(self, "lbl_scan_status") or not self.lbl_scan_status.winfo_exists():
@@ -961,25 +991,20 @@ class OptiManagerApp:
             self._tick_status_badge_pulse,
         )
 
-    def _get_selected_game_header_parts(self) -> tuple[str, str]:
-        label = "선택된 게임" if USE_KOREAN else "Selected Game"
+    def _get_selected_game_header_text(self) -> str:
         if self.selected_game_index is None or not (0 <= self.selected_game_index < len(self.found_exe_list)):
-            return "", ""
+            return ""
 
         game = self.found_exe_list[self.selected_game_index]
         if USE_KOREAN:
             game_name = str(game.get("display", "") or game.get("game_name_kr", "") or game.get("game_name", "")).strip()
         else:
             game_name = str(game.get("game_name", "") or game.get("display", "")).strip()
-        if not game_name:
-            return "", ""
-        return f"{label}:", game_name
+        return game_name
 
     def _update_selected_game_header(self):
         try:
-            label_text, game_name = self._get_selected_game_header_parts()
-            if hasattr(self, "lbl_selected_game_header_label") and self.lbl_selected_game_header_label.winfo_exists():
-                self.lbl_selected_game_header_label.configure(text=label_text)
+            game_name = self._get_selected_game_header_text()
             if hasattr(self, "lbl_selected_game_header") and self.lbl_selected_game_header.winfo_exists():
                 self.lbl_selected_game_header.configure(text=game_name)
         except Exception:
@@ -1876,18 +1901,19 @@ class OptiManagerApp:
         self.btn_select_folder.grid(row=0, column=1, padx=4, pady=(8, 8), sticky="w")
 
         supported_games_meta = ctk.CTkFrame(row, fg_color="transparent", corner_radius=0)
-        supported_games_meta.grid(row=0, column=3, padx=(8, _SCAN_META_RIGHT_INSET), pady=(8, 8), sticky="e")
+        supported_games_meta.grid(row=0, column=2, padx=(8, _SCAN_META_RIGHT_INSET), pady=(8, 8), sticky="ew")
+        supported_games_meta.grid_columnconfigure(0, weight=1)
 
         self.lbl_supported_games_label = ctk.CTkLabel(
             supported_games_meta,
-            text="Supported Games:",
-            width=self._meta_label_width,
+            text=self._get_supported_games_meta_label_text(),
+            width=self._scan_meta_label_width,
             font=ctk.CTkFont(family=FONT_UI, size=12, weight="bold"),
             text_color=_SECTION_LABEL_TEXT,
             anchor="e",
             justify="right",
         )
-        self.lbl_supported_games_label.grid(row=0, column=0, padx=(0, _META_VALUE_GAP), sticky="e")
+        self.lbl_supported_games_label.grid(row=0, column=1, padx=(0, _META_VALUE_GAP), sticky="e")
 
         self.lbl_supported_games_value = ctk.CTkLabel(
             supported_games_meta,
@@ -1897,7 +1923,7 @@ class OptiManagerApp:
             anchor="e",
             justify="right",
         )
-        self.lbl_supported_games_value.grid(row=0, column=1, sticky="e")
+        self.lbl_supported_games_value.grid(row=0, column=2, sticky="e")
 
         self.lbl_scan_status = ctk.CTkLabel(
             row,
@@ -1929,21 +1955,26 @@ class OptiManagerApp:
         header_row.grid(row=0, column=0, padx=(_CONTENT_SIDE_PAD, _CONTENT_SIDE_PAD), pady=(6, 6), sticky="ew")
         header_row.grid_columnconfigure(1, weight=1)
 
-        selected_header_row = ctk.CTkFrame(header_row, fg_color="transparent", corner_radius=0)
-        selected_header_row.grid(row=0, column=1, padx=(8, _META_RIGHT_PAD), pady=(1, 0), sticky="e")
-
-        label_text, game_name = self._get_selected_game_header_parts()
-
-        self.lbl_selected_game_header_label = ctk.CTkLabel(
-            selected_header_row,
-            text=label_text,
-            width=self._meta_label_width,
-            font=ctk.CTkFont(family=FONT_UI, size=12, weight="bold"),
-            text_color=_SECTION_LABEL_TEXT,
-            anchor="e",
-            justify="right",
+        self.lbl_supported_games_wiki_link = ctk.CTkLabel(
+            header_row,
+            text="지원 게임 목록 보기" if USE_KOREAN else "Check Supported Games",
+            font=ctk.CTkFont(family=FONT_UI, size=12, weight="bold", underline=True),
+            text_color=_LINK_ACTIVE if SUPPORTED_GAMES_WIKI_URL else _STATUS_TEXT,
+            anchor="w",
+            justify="left",
+            cursor="hand2" if SUPPORTED_GAMES_WIKI_URL else "arrow",
         )
-        self.lbl_selected_game_header_label.grid(row=0, column=0, padx=(0, _META_VALUE_GAP), sticky="e")
+        self.lbl_supported_games_wiki_link.grid(row=0, column=0, padx=(14, 12), pady=(1, 0), sticky="w")
+        if SUPPORTED_GAMES_WIKI_URL:
+            self.lbl_supported_games_wiki_link.bind("<Enter>", lambda _event: self._set_supported_games_wiki_link_hover(True))
+            self.lbl_supported_games_wiki_link.bind("<Leave>", lambda _event: self._set_supported_games_wiki_link_hover(False))
+            self.lbl_supported_games_wiki_link.bind("<Button-1>", self._open_supported_games_wiki)
+
+        selected_header_row = ctk.CTkFrame(header_row, fg_color="transparent", corner_radius=0)
+        selected_header_row.grid(row=0, column=1, padx=(8, _META_RIGHT_PAD), pady=(1, 0), sticky="ew")
+        selected_header_row.grid_columnconfigure(0, weight=1)
+
+        game_name = self._get_selected_game_header_text()
 
         self.lbl_selected_game_header = ctk.CTkLabel(
             selected_header_row,
