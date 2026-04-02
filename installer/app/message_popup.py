@@ -115,7 +115,10 @@ def show_message_popup(
     container.pack(fill="both", expand=True, padx=22, pady=(18, 12))
 
     message_frame = ctk.CTkFrame(container, fg_color="transparent")
-    message_frame.pack(fill="both", expand=True)
+    if scrollable:
+        message_frame.pack(fill="x", expand=False)
+    else:
+        message_frame.pack(fill="both", expand=True)
     if scrollable:
         message_frame.grid_columnconfigure(0, weight=1)
         message_frame.grid_rowconfigure(0, weight=1)
@@ -261,7 +264,7 @@ def show_message_popup(
             desired_popup_w=desired_popup_w,
             min_popup_w=220 if scrollable else 200,
             min_popup_h=140 if scrollable else 120,
-            use_requested_size=use_requested_size,
+            use_requested_size=(use_requested_size or scrollable),
             debug_name=debug_name,
         )
 
