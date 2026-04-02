@@ -1,0 +1,1 @@
+"""Installer application package."""

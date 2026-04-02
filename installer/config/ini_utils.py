@@ -11,7 +11,7 @@ import unicodedata
 from pathlib import Path
 from typing import Optional
 
-from network_utils import get_shared_retry_session
+from ..common.network_utils import get_shared_retry_session
 
 
 _file_session = get_shared_retry_session()

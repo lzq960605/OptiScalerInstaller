@@ -21,19 +21,29 @@ from typing import Optional
 import ctypes
 import locale
 import stat
-import gpu_notice
-import gpu_service
-import installer_services
-import ini_utils
-from popup_markup import (
+from installer.app import (
+    PopupFadeController,
+    create_modal_popup,
     create_popup_markup_text,
     estimate_wrapped_text_lines as _estimate_wrapped_text_lines,
+    gpu_notice,
+    present_modal_popup,
     render_markup_to_text_widget,
+    rtss_notice,
     strip_markup_text,
 )
-from popup_utils import PopupFadeController, create_modal_popup, present_modal_popup
-from process_utils import subprocess_no_window_kwargs
-import sheet_loader
+from installer.common import subprocess_no_window_kwargs
+from installer.config import ini_utils
+from installer.data import sheet_loader
+from installer.install import (
+    OPTISCALER_ASI_NAME,
+    install_optipatcher,
+    install_reframework_dinput8,
+    install_ultimate_asi_loader,
+    install_unreal5_patch,
+    services as installer_services,
+)
+from installer.system import gpu_service
 if os.name == "nt":
     import winreg
 
@@ -63,8 +73,6 @@ except ModuleNotFoundError as e:
         f"Interpreter: {sys.executable}\n"
         f"Install with: \"{sys.executable}\" -m pip install python-dotenv"
     ) from e
-
-import rtss_notice
 
  # Application Version
 APP_VERSION = "0.2.3"
@@ -3507,7 +3515,11 @@ class OptiManagerApp:
         preferred_dll = str(game_data.get("dll_name", "")).strip()
         logger = get_prefixed_logger(str(game_data.get("game_name", "unknown")).strip() or "unknown")
         try:
-            resolved_name = installer_services.resolve_proxy_dll_name(target_path, preferred_dll, logger=logger)
+            if bool(game_data.get("ultimate_asi_loader")):
+                resolved_name = OPTISCALER_ASI_NAME
+                logger.info("Install precheck selected Ultimate ASI Loader mode: %s", resolved_name)
+            else:
+                resolved_name = installer_services.resolve_proxy_dll_name(target_path, preferred_dll, logger=logger)
             self.install_precheck_ok = True
             self.install_precheck_error = ""
             self.install_precheck_dll_name = resolved_name
@@ -3627,6 +3639,7 @@ class OptiManagerApp:
                             "display": _kr_display or entry["display"],
                             "game_name": entry.get("game_name", entry.get("display", "")),
                             "dll_name": entry["dll_name"],
+                            "ultimate_asi_loader": entry.get("ultimate_asi_loader", False),
                             "ini_settings": entry.get("ini_settings", {}),
                             "ingame_ini": entry.get("ingame_ini", ""),
                             "ingame_settings": entry.get("ingame_settings", {}),
@@ -3794,11 +3807,21 @@ class OptiManagerApp:
         game_name = str(game_data.get("game_name", "unknown")).strip() or "unknown"
         logger = get_prefixed_logger(game_name)
         try:
-            final_dll_name = installer_services.resolve_proxy_dll_name(
-                target_path,
-                resolved_dll_name or str(game_data.get("dll_name", "")).strip(),
-                logger=logger,
-            )
+            use_ultimate_asi_loader = bool(game_data.get("ultimate_asi_loader"))
+            if use_ultimate_asi_loader and game_data.get("reframework_url"):
+                raise RuntimeError(
+                    "Ultimate ASI Loader and REFramework both require dinput8.dll, and this combination is not supported yet."
+                )
+
+            if use_ultimate_asi_loader:
+                final_dll_name = resolved_dll_name or OPTISCALER_ASI_NAME
+                logger.info("Install mode: Ultimate ASI Loader (%s)", final_dll_name)
+            else:
+                final_dll_name = installer_services.resolve_proxy_dll_name(
+                    target_path,
+                    resolved_dll_name or str(game_data.get("dll_name", "")).strip(),
+                    logger=logger,
+                )
             logger.info("Install started: target=%s", target_path)
             exclude_raw = str(self.module_download_links.get("__exclude_list__", "")).strip()
             exclude_patterns = [token.strip() for token in exclude_raw.split("|") if token.strip()]
@@ -3820,31 +3843,24 @@ class OptiManagerApp:
                 )
                 logger.info(f"Extracted and installed files to {target_path}")
 
-            module_key = str(game_data.get("module_dl", "")).strip().lower()
-
-            unreal_link_entry = self.module_download_links.get("unreal5")
-            unreal_url = ""
-            if isinstance(unreal_link_entry, dict) and unreal_link_entry.get("url"):
-                unreal_url = unreal_link_entry["url"]
-
             ini_path = os.path.join(target_path, "OptiScaler.ini")
             if not os.path.exists(ini_path):
                 raise FileNotFoundError("OptiScaler.ini not found after installation")
 
-            if game_data.get("reframework_url"):
-                installer_services.install_reframework_dinput8_from_url(game_data["reframework_url"], target_path, logger=logger)
-                logger.info(f"Installed REFramework dinput8.dll from {game_data['reframework_url']} to {target_path}")
+            if use_ultimate_asi_loader:
+                install_ultimate_asi_loader(target_path, self.module_download_links, logger=logger)
 
             merged_ini_settings = dict(game_data.get("ini_settings", {}))
-            if game_data.get("optipatcher"):
-                opti_key = module_key or "optipatcher"
-                opti_link_entry = self.module_download_links.get(opti_key) or self.module_download_links.get("optipatcher")
-                opti_url = OPTIPATCHER_URL
-                if isinstance(opti_link_entry, dict):
-                    opti_url = opti_link_entry.get("url", OPTIPATCHER_URL)
-                installer_services.install_optipatcher(target_path, url=opti_url, logger=logger)
-                merged_ini_settings["LoadAsiPlugins"] = "True"
-                logger.info(f"Installed OptiPatcher from {opti_url} to {target_path}")
+            install_reframework_dinput8(target_path, game_data, logger=logger)
+            merged_ini_settings.update(
+                install_optipatcher(
+                    target_path,
+                    game_data,
+                    self.module_download_links,
+                    OPTIPATCHER_URL,
+                    logger=logger,
+                )
+            )
 
             ini_utils.apply_ini_settings(ini_path, merged_ini_settings, force_frame_generation=True, logger=logger)
             logger.info(f"Applied ini settings to {ini_path}")
@@ -3907,13 +3923,13 @@ class OptiManagerApp:
             except Exception:
                 logger.exception("Failed while handling engine.ini for %s", target_path)
 
-            unreal5_rule = str(game_data.get("unreal5_rule", "") or "").strip()
-            if gpu_service.matches_gpu_rule(unreal5_rule, self.gpu_info) and unreal_url:
-                unreal_installed = installer_services.install_unreal5_from_url(unreal_url, target_path, logger=logger)
-                if unreal_installed:
-                    logger.info(f"Installed Unreal5 patch from {unreal_url} to {target_path}")
-                else:
-                    logger.info("Skipped Unreal5 patch because dxgi.dll is already present in %s", target_path)
+            install_unreal5_patch(
+                target_path,
+                game_data,
+                self.module_download_links,
+                self.gpu_info,
+                logger=logger,
+            )
 
             if fsr4_required:
                 if not fsr4_source_archive:

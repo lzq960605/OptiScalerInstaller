@@ -5,7 +5,7 @@ import fnmatch
 from pathlib import Path
 from typing import Iterable
 
-import installer_services
+from ...install import services as installer_services
 
 _MONITORED_DLL_NAMES = (
     "dxgi.dll",
@@ -143,7 +143,7 @@ def _scan_renodx_addons(target_dir: Path, logger=None) -> tuple[str, ...]:
 
 def _is_optiscaler_managed(file_path: Path) -> bool:
     try:
-        return bool(installer_services._is_optiscaler_managed_proxy_dll(file_path))
+        return bool(installer_services.is_optiscaler_managed_proxy_dll(file_path))
     except Exception:
         return False
 
@@ -152,8 +152,7 @@ def _identify_binary_owner(file_path: Path) -> str:
     if _is_optiscaler_managed(file_path):
         return "optiscaler"
 
-    version_reader = getattr(installer_services, "_read_windows_version_strings", None)
-    version_info = version_reader(file_path) if callable(version_reader) else {}
+    version_info = installer_services.read_windows_version_strings(file_path)
     haystack = " ".join(
         part.lower()
         for part in [file_path.name, *(str(value) for value in version_info.values())]

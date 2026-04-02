@@ -8,8 +8,8 @@ from typing import Any, Mapping, Optional
 
 import customtkinter as ctk
 from PIL import Image
-from popup_markup import create_popup_markup_text, estimate_wrapped_text_lines
-from popup_utils import PopupFadeController, create_modal_popup, present_modal_popup
+from .popup_markup import create_popup_markup_text, estimate_wrapped_text_lines
+from .popup_utils import PopupFadeController, create_modal_popup, present_modal_popup
 
 if os.name == "nt":
     import winreg

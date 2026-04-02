@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
-import installer_services
+from ...install import services as installer_services
 
 from .install_precheck import build_mod_conflict_notice, scan_target_mod_conflicts
 

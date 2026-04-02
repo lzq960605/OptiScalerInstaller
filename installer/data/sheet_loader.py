@@ -7,7 +7,7 @@ import unicodedata
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
-from network_utils import get_shared_retry_session
+from ..common.network_utils import get_shared_retry_session
 
 
 _file_session = get_shared_retry_session()
@@ -82,6 +82,12 @@ def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
     exe_keys = ["exe", "exe_name", "filename", "game_exe", "executable", "gamefile"]
     display_keys = ["display", "game_name", "gamename", "name", "title", "display_name"]
     dll_keys = ["dll_name", "dll", "dllname", "rename_dll", "target_dll"]
+    ultimate_asi_loader_keys = [
+        "ultimateasiloader",
+        "ultimate_asi_loader",
+        "ultimate asi loader",
+        "use_ultimate_asi_loader",
+    ]
     optipatcher_keys = ["optipatcher", "opti_patcher", "use_optipatcher", "opti patcher"]
     unreal5_keys = ["unreal5", "unreal_5", "unreal5_url", "unreal5 patch", "unreal5_patch"]
     reframework_keys = ["reframework", "reframework_url", "re_framework", "re_framework_url"]
@@ -98,6 +104,7 @@ def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
     exe_col = next((c for c in columns if c in exe_keys), None)
     display_col = next((c for c in columns if c in display_keys), None)
     dll_col = next((c for c in columns if c in dll_keys), None)
+    ultimate_asi_loader_col = next((c for c in columns if c in ultimate_asi_loader_keys), None)
     optipatcher_col = next((c for c in columns if c in optipatcher_keys), None)
     unreal5_col = next((c for c in columns if c in unreal5_keys), None)
     reframework_col = next((c for c in columns if c in reframework_keys), None)
@@ -117,6 +124,8 @@ def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
         display_col = next((c for c in columns if "name" in c or "title" in c), None)
     if dll_col is None:
         dll_col = next((c for c in columns if "dll" in c), None)
+    if ultimate_asi_loader_col is None:
+        ultimate_asi_loader_col = next((c for c in columns if "ultimate" in c and "asi" in c), None)
     if optipatcher_col is None:
         optipatcher_col = next((c for c in columns if "opti" in c and "patcher" in c), None)
     if unreal5_col is None:
@@ -144,6 +153,7 @@ def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
     exe_index = columns.index(exe_col)
     display_index = columns.index(display_col)
     dll_index = columns.index(dll_col) if dll_col else None
+    ultimate_asi_loader_index = columns.index(ultimate_asi_loader_col) if ultimate_asi_loader_col else None
     optipatcher_index = columns.index(optipatcher_col) if optipatcher_col else None
     unreal5_index = columns.index(unreal5_col) if unreal5_col else None
     reframework_index = columns.index(reframework_col) if reframework_col else None
@@ -181,6 +191,7 @@ def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
         game_name = row[display_index].strip()
         display_name = game_name or exe_path
         dll_name = ""
+        ultimate_asi_loader_enabled = False
         optipatcher_enabled = False
         unreal5_url = ""
         unreal5_rule = ""
@@ -195,6 +206,8 @@ def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
         supported_gpu = ""
         if dll_index is not None and len(row) > dll_index:
             dll_name = row[dll_index].strip()
+        if ultimate_asi_loader_index is not None and len(row) > ultimate_asi_loader_index:
+            ultimate_asi_loader_enabled = _is_true_value(row[ultimate_asi_loader_index])
         if optipatcher_index is not None and len(row) > optipatcher_index:
             optipatcher_enabled = _is_true_value(row[optipatcher_index])
         if unreal5_index is not None and len(row) > unreal5_index:
@@ -274,6 +287,7 @@ def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
                 "game_name": game_name,
                 "game_name_kr": game_name_kr,
                 "dll_name": dll_name,
+                "ultimate_asi_loader": ultimate_asi_loader_enabled,
                 "ini_settings": ini_settings,
                 "optipatcher": optipatcher_enabled,
                 "unreal5_url": unreal5_url,

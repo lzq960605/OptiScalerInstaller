@@ -10,8 +10,8 @@ from ctypes import wintypes
 from pathlib import Path
 from urllib.parse import urlparse
 
-from network_utils import get_shared_retry_session
-from process_utils import subprocess_no_window_kwargs
+from ..common.network_utils import get_shared_retry_session
+from ..common.process_utils import subprocess_no_window_kwargs
 
 try:
     import py7zr
@@ -130,6 +130,10 @@ def _read_windows_version_strings(file_path: Path) -> dict[str, str]:
         return {}
 
 
+def read_windows_version_strings(file_path) -> dict[str, str]:
+    return _read_windows_version_strings(Path(file_path))
+
+
 def _file_contains_optiscaler_signature(file_path: Path) -> bool:
     try:
         with file_path.open("rb") as f:
@@ -150,6 +154,10 @@ def _is_optiscaler_managed_proxy_dll(file_path: Path) -> bool:
         if "optiscaler" in value.lower():
             return True
     return _file_contains_optiscaler_signature(file_path)
+
+
+def is_optiscaler_managed_proxy_dll(file_path) -> bool:
+    return _is_optiscaler_managed_proxy_dll(Path(file_path))
 
 
 def target_has_filename(target_path, file_name: str) -> bool:

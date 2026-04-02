@@ -8,7 +8,7 @@ import re
 import subprocess
 from typing import Mapping
 
-from process_utils import subprocess_no_window_kwargs
+from ..common.process_utils import subprocess_no_window_kwargs
 
 
 _ALLOWED_VENDOR_KEYWORDS = (

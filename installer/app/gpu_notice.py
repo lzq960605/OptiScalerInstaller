@@ -5,11 +5,11 @@ import logging
 from typing import Optional, Sequence, TYPE_CHECKING
 
 import customtkinter as ctk
-from popup_markup import create_popup_markup_text, estimate_wrapped_text_lines
-from popup_utils import PopupFadeController, close_modal_popup, create_modal_popup, present_modal_popup
+from .popup_markup import create_popup_markup_text, estimate_wrapped_text_lines
+from .popup_utils import PopupFadeController, close_modal_popup, create_modal_popup, present_modal_popup
 
 if TYPE_CHECKING:
-    from gpu_service import GpuAdapterChoice
+    from ..system.gpu_service import GpuAdapterChoice
 
 
 @dataclass(frozen=True)
