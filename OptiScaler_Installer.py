@@ -73,6 +73,28 @@ except ModuleNotFoundError as e:
         f"Install with: \"{sys.executable}\" -m pip install python-dotenv"
     ) from e
 
+
+def _iter_env_file_candidates() -> tuple[Path, ...]:
+    candidates: list[Path] = []
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        # Keep the bundled .env as a fallback, but let a sidecar .env next to the
+        # built executable override it so config changes do not require a rebuild.
+        candidates.append(Path(sys._MEIPASS) / ".env")
+        candidates.append(Path(sys.executable).resolve().parent / ".env")
+    else:
+        candidates.append(Path(__file__).resolve().parent / ".env")
+
+    unique_candidates: list[Path] = []
+    seen_candidates = set()
+    for candidate in candidates:
+        normalized = str(candidate.resolve(strict=False)).lower()
+        if normalized in seen_candidates:
+            continue
+        seen_candidates.add(normalized)
+        unique_candidates.append(candidate)
+    return tuple(unique_candidates)
+
+
  # Application Version
 APP_VERSION = "0.2.3"
 # Install flow supports up to two detected GPUs. Dual-GPU requires explicit user selection.
@@ -80,16 +102,12 @@ MAX_SUPPORTED_GPU_COUNT = 2
 
  # Configure logging deterministically below (avoid calling basicConfig early)
 
- # Load .env file (supports both local development and PyInstaller bundle via _MEIPASS)
-if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
-    # Running as PyInstaller bundle
-    _env_path = os.path.join(sys._MEIPASS, '.env')
-else:
-    # Running as script
-    _env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '.env')
-
-if os.path.exists(_env_path):
-    load_dotenv(_env_path)
+ # Load .env file(s) deterministically and let the most local file win.
+for _env_path in _iter_env_file_candidates():
+    if _env_path.exists():
+        # Override inherited env vars so VS Code terminals or parent processes
+        # cannot keep stale values after .env changes.
+        load_dotenv(_env_path, override=True)
 
 
 def _get_int_env(name: str, default: int = 0) -> int:
