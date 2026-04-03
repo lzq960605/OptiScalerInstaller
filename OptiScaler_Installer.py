@@ -293,7 +293,7 @@ INSTALLER_LATEST_RELEASE_URL = "https://github.com/onehoon/OptiScalerInstaller/r
 COVERS_REPO_RAW_BASE_URL = str(
     os.environ.get(
         "OPTISCALER_COVERS_RAW_BASE_URL",
-        "https://raw.githubusercontent.com/onehoon/covers/main/assets",
+        "https://raw.githubusercontent.com/onehoon/OptiScalerInstaller/covers/assets",
     )
     or ""
 ).strip().rstrip("/")
