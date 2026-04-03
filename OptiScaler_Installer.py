@@ -10,7 +10,7 @@ import tkinter.font as tkfont
 import math
 import hashlib
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 from tkinter import filedialog, messagebox
 import logging
 import sys
@@ -288,7 +288,15 @@ LOCAL_APPDATA_DIR = Path(os.environ.get("LOCALAPPDATA") or Path(tempfile.gettemp
 APP_CACHE_DIR = LOCAL_APPDATA_DIR / "OptiScalerInstaller"
 OPTISCALER_CACHE_DIR = APP_CACHE_DIR / "cache" / "optiscaler"
 FSR4_CACHE_DIR = APP_CACHE_DIR / "cache" / "fsr4"
+COVER_CACHE_DIR = APP_CACHE_DIR / "cache" / "covers"
 INSTALLER_LATEST_RELEASE_URL = "https://github.com/onehoon/OptiScalerInstaller/releases/latest"
+COVERS_REPO_RAW_BASE_URL = str(
+    os.environ.get(
+        "OPTISCALER_COVERS_RAW_BASE_URL",
+        "https://raw.githubusercontent.com/onehoon/covers/main/assets",
+    )
+    or ""
+).strip().rstrip("/")
 FSR4_SKIP_GPU_RULE = "*rx 90*"
 APP_BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 ASSETS_DIR = APP_BASE_DIR / "assets"
@@ -297,6 +305,10 @@ DEFAULT_POSTER_CANDIDATES = [
     ASSETS_DIR / "default_poster.jpg",
     ASSETS_DIR / "default_poster.png",
 ]
+ALLOWED_COVER_IMAGE_EXTENSIONS = {".webp", ".png", ".jpg"}
+BUNDLED_COVER_FILENAME_MAP = {
+    "rtss.webp": "RTSS.webp",
+}
 
 
 def _is_windows_slate_mode() -> bool:
@@ -337,7 +349,7 @@ HI_DPI_SCALE = 2
 TARGET_POSTER_W = CARD_W * HI_DPI_SCALE
 TARGET_POSTER_H = CARD_H * HI_DPI_SCALE
 INFO_TEXT_OFFSET_PX = 10
-POSTER_CACHE_VERSION = 1
+POSTER_CACHE_VERSION = 2
 ENABLE_POSTER_CACHE = os.environ.get("OPTISCALER_ENABLE_POSTER_CACHE", "1").strip().lower() in {"1", "true", "yes", "on"}
 IMAGE_CACHE_MAX = int(os.environ.get("OPTISCALER_IMAGE_CACHE_MAX", "100"))
 
@@ -397,6 +409,23 @@ def _resolve_safe_child_path(base_dir: Path, child_path: str) -> Optional[Path]:
         return resolved_child
     except Exception:
         return None
+
+
+def _normalize_cover_filename(value: str) -> str:
+    raw_name = str(value or "").strip()
+    if not raw_name:
+        return ""
+    if raw_name.lower() in {"null", "none", "na", "n/a", "-"}:
+        return ""
+    if any(sep in raw_name for sep in ("/", "\\", ":")):
+        return ""
+    if Path(raw_name).name != raw_name:
+        return ""
+
+    suffix = Path(raw_name).suffix.lower()
+    if suffix not in ALLOWED_COVER_IMAGE_EXTENSIONS:
+        return ""
+    return raw_name
 
 
 def _make_default_poster_base(width: int, height: int) -> Image.Image:
@@ -593,6 +622,8 @@ class OptiManagerApp:
         self.optiscaler_cache_dir.mkdir(parents=True, exist_ok=True)
         self.fsr4_cache_dir = FSR4_CACHE_DIR
         self.fsr4_cache_dir.mkdir(parents=True, exist_ok=True)
+        self.cover_cache_dir = COVER_CACHE_DIR
+        self.cover_cache_dir.mkdir(parents=True, exist_ok=True)
         self.optiscaler_archive_ready = False
         self.optiscaler_archive_downloading = False
         self.optiscaler_archive_error = ""
@@ -2722,11 +2753,12 @@ class OptiManagerApp:
         # Load fallback first, then fetch real image asynchronously via queue.
         self._set_card_placeholder(index, img_label, game["display"])
         cover_url = game.get("cover_url", "")
+        filename_cover = game.get("filename_cover", "")
         self._queue_card_image_fetch(
             index,
             img_label,
             game["display"],
-            game.get("game_name", game.get("display", "")),
+            filename_cover,
             cover_url,
         )
 
@@ -2736,40 +2768,98 @@ class OptiManagerApp:
         pil_img = self._default_poster_base.copy().convert("RGBA")
         self.root.after(0, lambda idx=index, l=label, img=pil_img: self._set_card_base_image(idx, l, img))
 
-    def _find_local_cover_asset(self, game_name: str) -> Optional[Path]:
-        name = str(game_name or "").strip()
-        if not name:
+    def _find_bundled_cover_asset(self, cover_filename: str) -> Optional[Path]:
+        normalized = _normalize_cover_filename(cover_filename)
+        if not normalized:
             return None
 
-        search_names = [name]
-        # Windows file names cannot contain ':', so also try a colon-stripped variant.
-        colon_stripped = name.replace(":", "").strip()
-        if colon_stripped and colon_stripped not in search_names:
-            search_names.append(colon_stripped)
+        bundled_name = BUNDLED_COVER_FILENAME_MAP.get(normalized.casefold())
+        if not bundled_name:
+            return None
 
-        # Priority order requested: webp -> jpg -> png.
-        for lookup_name in search_names:
-            for ext in (".webp", ".jpg", ".png"):
-                candidate = ASSETS_DIR / f"{lookup_name}{ext}"
-                if candidate.exists() and candidate.is_file():
-                    return candidate
-
+        candidate = ASSETS_DIR / bundled_name
+        if candidate.exists() and candidate.is_file():
+            return candidate
         return None
 
-    def _poster_cache_key(self, title: str, url: str) -> str:
-        normalized_url = ""
-        if url:
+    def _get_cover_cache_path(self, cover_filename: str) -> Optional[Path]:
+        normalized = _normalize_cover_filename(cover_filename)
+        if not normalized:
+            return None
+        return _resolve_safe_child_path(Path(getattr(self, "cover_cache_dir", COVER_CACHE_DIR)), normalized)
+
+    def _build_cover_repo_raw_url(self, cover_filename: str) -> str:
+        normalized = _normalize_cover_filename(cover_filename)
+        if not normalized or not COVERS_REPO_RAW_BASE_URL:
+            return ""
+        return f"{COVERS_REPO_RAW_BASE_URL}/{quote(normalized, safe='')}"
+
+    def _poster_cache_key(self, source_type: str, source_value: str, title: str = "") -> str:
+        normalized_source = ""
+        raw_value = str(source_value or "").strip()
+        if source_type == "cover_url" and raw_value:
             try:
-                parsed = urlparse(url.strip())
-                # Ignore query/fragment so cache survives signed URL changes.
-                normalized_url = f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{parsed.path}".strip().lower()
+                parsed = urlparse(raw_value)
+                normalized_source = f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{parsed.path}".strip().lower()
             except Exception:
-                normalized_url = str(url).strip().lower()
-        source = normalized_url or (title or "").strip().lower()
-        if not source:
-            source = "unknown"
-        cache_source = f"poster|v{POSTER_CACHE_VERSION}|{TARGET_POSTER_W}x{TARGET_POSTER_H}|{source}"
+                normalized_source = raw_value.lower()
+        else:
+            normalized_source = raw_value.casefold()
+
+        if not normalized_source:
+            normalized_source = str(title or "").strip().casefold() or "unknown"
+
+        cache_source = f"poster|v{POSTER_CACHE_VERSION}|{TARGET_POSTER_W}x{TARGET_POSTER_H}|{source_type}|{normalized_source}"
         return hashlib.sha256(cache_source.encode("utf-8")).hexdigest()
+
+    def _load_prepared_image_from_path(self, image_path: Path, cache_key: str) -> Optional[Image.Image]:
+        cached_image = self._image_cache_get(cache_key) if ENABLE_POSTER_CACHE else None
+        if cached_image is not None:
+            return cached_image
+        if not image_path.exists() or not image_path.is_file():
+            return None
+
+        try:
+            with Image.open(image_path) as source_img:
+                pil_img = _prepare_cover_image(source_img, TARGET_POSTER_W, TARGET_POSTER_H)
+            if ENABLE_POSTER_CACHE:
+                self._image_cache_put(cache_key, pil_img)
+            return pil_img
+        except Exception as exc:
+            logging.warning("Failed to load cover image from %s: %s", image_path, exc)
+            return None
+
+    def _load_prepared_image_from_bytes(self, image_bytes: bytes, cache_key: str, source_label: str) -> Optional[Image.Image]:
+        cached_image = self._image_cache_get(cache_key) if ENABLE_POSTER_CACHE else None
+        if cached_image is not None:
+            return cached_image
+
+        try:
+            with Image.open(io.BytesIO(image_bytes)) as source_img:
+                pil_img = _prepare_cover_image(source_img, TARGET_POSTER_W, TARGET_POSTER_H)
+            if ENABLE_POSTER_CACHE:
+                self._image_cache_put(cache_key, pil_img)
+            return pil_img
+        except Exception as exc:
+            logging.warning("Failed to decode cover image from %s: %s", source_label, exc)
+            return None
+
+    def _download_image_bytes(self, url: str) -> bytes:
+        with self._image_session.get(url, timeout=IMAGE_TIMEOUT_SECONDS, stream=True) as response:
+            response.raise_for_status()
+            return b"".join(response.iter_content(chunk_size=65536))
+
+    def _store_cover_cache_bytes(self, cover_filename: str, image_bytes: bytes) -> Optional[Path]:
+        cache_path = self._get_cover_cache_path(cover_filename)
+        if cache_path is None:
+            return None
+
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = cache_path.with_name(cache_path.name + ".tmp")
+        with temp_path.open("wb") as cache_fp:
+            cache_fp.write(image_bytes)
+        temp_path.replace(cache_path)
+        return cache_path
 
     def _cancel_delayed_image_retry(self, index: int):
         after_id = self._delayed_image_retry_after_ids.pop(index, None)
@@ -2812,16 +2902,15 @@ class OptiManagerApp:
             return
         self._delayed_image_retry_after_ids[index] = after_id
 
-    def _queue_card_image_fetch(self, index: int, label: ctk.CTkLabel, title: str, game_name: str, url: str):
+    def _queue_card_image_fetch(self, index: int, label: ctk.CTkLabel, title: str, cover_filename: str, url: str):
         self._cancel_delayed_image_retry(index)
         self._pending_image_jobs[index] = {
             "index": index,
             "label": label,
             "title": title,
-            "game_name": game_name,
+            "cover_filename": cover_filename,
             "url": url,
             "generation": self._render_generation,
-            "cache_key": self._poster_cache_key(title, url),
             "delayed_retry_count": 0,
         }
         self._pump_image_jobs()
@@ -2898,7 +2987,7 @@ class OptiManagerApp:
             future = self._image_executor.submit(
                 self._load_poster_image_worker,
                 job["title"],
-                job.get("game_name", ""),
+                job.get("cover_filename", ""),
                 job["url"],
             )
             self._inflight_image_futures[future] = job
@@ -2928,39 +3017,60 @@ class OptiManagerApp:
         self._image_queue_after_id = None
         self._pump_image_jobs()
 
-    def _load_poster_image_worker(self, title: str, game_name: str, url: str) -> tuple[Image.Image, bool, bool]:
-        local_cover_path = self._find_local_cover_asset(game_name)
-        if local_cover_path is not None:
-            local_cache_key = f"local::v{POSTER_CACHE_VERSION}::{TARGET_POSTER_W}x{TARGET_POSTER_H}::{str(local_cover_path).lower()}"
-            cached_local = self._image_cache_get(local_cache_key) if ENABLE_POSTER_CACHE else None
-            if cached_local is not None:
-                return cached_local, False, False
-            try:
-                with Image.open(local_cover_path) as local_img:
-                    pil_img = _prepare_cover_image(local_img, TARGET_POSTER_W, TARGET_POSTER_H)
-                if ENABLE_POSTER_CACHE:
-                    self._image_cache_put(local_cache_key, pil_img)
-                return pil_img, False, False
-            except Exception as exc:
-                logging.warning("Failed to load local cover image from %s: %s", local_cover_path, exc)
+    def _load_poster_image_worker(self, title: str, cover_filename: str, url: str) -> tuple[Image.Image, bool, bool]:
+        normalized_cover_filename = _normalize_cover_filename(cover_filename)
+        repo_failed = False
 
-        cache_key = self._poster_cache_key(title, url)
+        if normalized_cover_filename:
+            cover_cache_key = self._poster_cache_key("cover_file", normalized_cover_filename, title=title)
+
+            bundled_cover_path = self._find_bundled_cover_asset(normalized_cover_filename)
+            if bundled_cover_path is not None:
+                pil_img = self._load_prepared_image_from_path(bundled_cover_path, cover_cache_key)
+                if pil_img is not None:
+                    return pil_img, False, False
+
+            disk_cache_path = self._get_cover_cache_path(normalized_cover_filename)
+            if disk_cache_path is not None and disk_cache_path.exists():
+                pil_img = self._load_prepared_image_from_path(disk_cache_path, cover_cache_key)
+                if pil_img is not None:
+                    return pil_img, False, False
+                try:
+                    disk_cache_path.unlink()
+                    logging.info("Removed invalid cached cover image: %s", disk_cache_path)
+                except OSError:
+                    logging.warning("Failed to remove invalid cached cover image: %s", disk_cache_path, exc_info=True)
+
+            repo_url = self._build_cover_repo_raw_url(normalized_cover_filename)
+            if repo_url:
+                try:
+                    image_bytes = self._download_image_bytes(repo_url)
+                    pil_img = self._load_prepared_image_from_bytes(image_bytes, cover_cache_key, repo_url)
+                    if pil_img is None:
+                        raise RuntimeError("Downloaded cover image could not be decoded")
+                    try:
+                        self._store_cover_cache_bytes(normalized_cover_filename, image_bytes)
+                    except Exception:
+                        logging.warning("Failed to cache cover image for %s", normalized_cover_filename, exc_info=True)
+                    return pil_img, False, False
+                except Exception as exc:
+                    repo_failed = True
+                    logging.warning("Failed to load cover image from covers repo %s: %s", repo_url, exc)
+
+        cache_key = self._poster_cache_key("cover_url", url, title=title)
         cached_image = self._image_cache_get(cache_key) if ENABLE_POSTER_CACHE else None
         if cached_image is not None:
             return cached_image, False, False
 
         if not url:
             fallback = self._default_poster_base.copy().convert("RGBA")
-            return fallback, True, False
+            return fallback, True, repo_failed
 
         try:
-            with self._image_session.get(url, timeout=IMAGE_TIMEOUT_SECONDS, stream=True) as response:
-                response.raise_for_status()
-                data = b"".join(response.iter_content(chunk_size=65536))
-            with Image.open(io.BytesIO(data)) as downloaded_img:
-                pil_img = _prepare_cover_image(downloaded_img, TARGET_POSTER_W, TARGET_POSTER_H)
-            if ENABLE_POSTER_CACHE:
-                self._image_cache_put(cache_key, pil_img)
+            image_bytes = self._download_image_bytes(url)
+            pil_img = self._load_prepared_image_from_bytes(image_bytes, cache_key, url)
+            if pil_img is None:
+                raise RuntimeError("Downloaded cover image could not be decoded")
             return pil_img, False, False
         except Exception as exc:
             logging.warning("Failed to load cover image from %s: %s", url, exc)
@@ -3256,7 +3366,7 @@ class OptiManagerApp:
                     actual_source = os.path.join(tmpdir, contents[0])
                 else:
                     actual_source = tmpdir
-                installer_services.backup_existing_optiscaler_proxy_dlls(target_path, logger=logger)
+                installer_services.backup_existing_optiscaler_dlls(target_path, logger=logger)
                 installer_services.remove_legacy_optiscaler_files(target_path, logger=logger)
                 installer_services.install_from_source_folder(
                     actual_source,

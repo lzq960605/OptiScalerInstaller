@@ -32,6 +32,21 @@ def _pick_match_anchor(match_files: list[str]) -> str:
     return match_files[0] if match_files else ""
 
 
+def _normalize_cover_filename(value) -> str:
+    raw = str(value).strip()
+    if not raw:
+        return ""
+    if raw.lower() in {"null", "none", "na", "n/a", "-"}:
+        return ""
+    if any(sep in raw for sep in ("/", "\\", ":")):
+        return ""
+
+    ext = str(raw).rsplit(".", 1)[-1].lower() if "." in raw else ""
+    if f".{ext}" not in {".webp", ".png", ".jpg"}:
+        return ""
+    return raw
+
+
 def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
     url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=csv&gid={gid}"
 
@@ -93,6 +108,7 @@ def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
     reframework_keys = ["reframework", "reframework_url", "re_framework", "re_framework_url"]
     information_keys = ["#information", "information", "info", "game_information"]
     cover_keys = ["cover_image", "cover", "poster", "poster_url", "image_url", "cover_url"]
+    filename_cover_keys = ["filename_cover", "cover_filename", "poster_filename"]
     module_dl_keys = ["module_dl", "module", "module_name"]
     ingame_ini_keys = ["#ingame_ini", "ingame_ini", "in_game_ini"]
     ingame_setting_keys = ["#ingame_setting", "ingame_setting", "in_game_setting", "#ingame_settings", "ingame_settings"]
@@ -110,6 +126,7 @@ def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
     reframework_col = next((c for c in columns if c in reframework_keys), None)
     information_col = next((c for c in columns if c in information_keys), None)
     cover_col = next((c for c in columns if c in cover_keys), None)
+    filename_cover_col = next((c for c in columns if c in filename_cover_keys), None)
     module_dl_col = next((c for c in columns if c in module_dl_keys), None)
     ingame_ini_col = next((c for c in columns if c in ingame_ini_keys), None)
     ingame_setting_col = next((c for c in columns if c in ingame_setting_keys), None)
@@ -136,6 +153,8 @@ def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
         information_col = next((c for c in columns if "information" in c or c == "info"), None)
     if cover_col is None:
         cover_col = next((c for c in columns if "cover" in c or "poster" in c or "image" in c), None)
+    if filename_cover_col is None:
+        filename_cover_col = next((c for c in columns if "filename" in c and ("cover" in c or "poster" in c)), None)
     if module_dl_col is None:
         module_dl_col = next((c for c in columns if "module" in c and "dl" in c), None)
     if ingame_ini_col is None:
@@ -159,6 +178,7 @@ def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
     reframework_index = columns.index(reframework_col) if reframework_col else None
     information_index = columns.index(information_col) if information_col else None
     cover_index = columns.index(cover_col) if cover_col else None
+    filename_cover_index = columns.index(filename_cover_col) if filename_cover_col else None
     module_dl_index = columns.index(module_dl_col) if module_dl_col else None
     ingame_ini_index = columns.index(ingame_ini_col) if ingame_ini_col else None
     ingame_setting_index = columns.index(ingame_setting_col) if ingame_setting_col else None
@@ -203,6 +223,7 @@ def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
         game_name_kr = ""
         information_kr = ""
         cover_url = ""
+        filename_cover = ""
         supported_gpu = ""
         if dll_index is not None and len(row) > dll_index:
             dll_name = row[dll_index].strip()
@@ -223,6 +244,8 @@ def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
             information = row[information_index].replace("\r\n", "\n").replace("\r", "\n").strip()
         if cover_index is not None and len(row) > cover_index:
             cover_url = _normalize_optional_url(row[cover_index])
+        if filename_cover_index is not None and len(row) > filename_cover_index:
+            filename_cover = _normalize_cover_filename(row[filename_cover_index])
         if module_dl_index is not None and len(row) > module_dl_index:
             module_dl = str(row[module_dl_index]).strip().lower()
         if ingame_ini_index is not None and len(row) > ingame_ini_index:
@@ -299,6 +322,7 @@ def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
                 "information": information,
                 "information_kr": information_kr,
                 "cover_url": cover_url,
+                "filename_cover": filename_cover,
                 "supported_gpu": supported_gpu,
                 "ingame_ini": ingame_ini_name,
                 "ingame_settings": ingame_settings,

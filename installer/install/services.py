@@ -29,6 +29,10 @@ OPTISCALER_PROXY_DLL_NAMES = {
     "wininet.dll",
     "winhttp.dll",
 }
+OPTISCALER_BACKUP_DLL_NAMES = (
+    OPTISCALER_DLL,
+    *tuple(sorted(OPTISCALER_PROXY_DLL_NAMES, key=str.lower)),
+)
 # Legacy OptiScaler-side compatibility cleanup targets.
 # These names are intentionally removed as stale OptiScaler artifacts, not treated as third-party mods.
 OPTISCALER_LEGACY_REMOVE_NAMES = {
@@ -73,17 +77,8 @@ def _should_exclude_rel_path(rel_path: str, patterns: list[str]) -> bool:
     return False
 
 
-def _next_backup_path(file_path: Path) -> Path:
-    candidate = file_path.with_name(file_path.name + ".bak")
-    if not candidate.exists():
-        return candidate
-
-    index = 1
-    while True:
-        candidate = file_path.with_name(f"{file_path.name}.bak.{index}")
-        if not candidate.exists():
-            return candidate
-        index += 1
+def _old_opti_backup_path(file_path: Path) -> Path:
+    return file_path.with_name(f"old_opti_{file_path.name}")
 
 
 def _ensure_writable(file_path: Path) -> None:
@@ -214,27 +209,31 @@ def resolve_proxy_dll_name(target_path, preferred_name="", logger=None) -> str:
     )
 
 
-def backup_existing_optiscaler_proxy_dlls(target_path, logger=None):
+def backup_existing_optiscaler_dlls(target_path, logger=None):
     target_dir = Path(target_path)
     if not target_dir.is_dir():
         raise ValueError(f"Invalid target folder: {target_path}")
 
-    for dll_name in sorted(OPTISCALER_PROXY_DLL_NAMES):
+    for dll_name in OPTISCALER_BACKUP_DLL_NAMES:
         dll_path = target_dir / dll_name
         if not dll_path.exists() or not dll_path.is_file():
             continue
         if not _is_optiscaler_managed_proxy_dll(dll_path):
-            message = f"Skipped backup for non-OptiScaler proxy DLL: {dll_path.name}"
+            message = f"Skipped backup for non-OptiScaler DLL cleanup candidate: {dll_path.name}"
             if logger:
                 logger.info(message)
             else:
                 logging.info(message)
             continue
 
-        backup_path = _next_backup_path(dll_path)
+        backup_path = _old_opti_backup_path(dll_path)
         _ensure_writable(dll_path)
         backup_path.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(dll_path), str(backup_path))
+        if backup_path.exists():
+            if not backup_path.is_file():
+                raise RuntimeError(f"Existing OptiScaler backup path is not a file: {backup_path}")
+            _ensure_writable(backup_path)
+        dll_path.replace(backup_path)
 
         message = f"Backed up existing OptiScaler DLL: {dll_path.name} -> {backup_path.name}"
         if logger:
