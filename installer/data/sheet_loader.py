@@ -7,6 +7,7 @@ import unicodedata
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
 
+from ..common.cover_utils import normalize_cover_filename
 from ..common.network_utils import get_shared_retry_session
 
 
@@ -30,21 +31,6 @@ def _pick_match_anchor(match_files: list[str]) -> str:
         if token.endswith(".exe"):
             return token
     return match_files[0] if match_files else ""
-
-
-def _normalize_cover_filename(value) -> str:
-    raw = str(value).strip()
-    if not raw:
-        return ""
-    if raw.lower() in {"null", "none", "na", "n/a", "-"}:
-        return ""
-    if any(sep in raw for sep in ("/", "\\", ":")):
-        return ""
-
-    ext = str(raw).rsplit(".", 1)[-1].lower() if "." in raw else ""
-    if f".{ext}" not in {".webp", ".png", ".jpg"}:
-        return ""
-    return raw
 
 
 def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
@@ -245,7 +231,7 @@ def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
         if cover_index is not None and len(row) > cover_index:
             cover_url = _normalize_optional_url(row[cover_index])
         if filename_cover_index is not None and len(row) > filename_cover_index:
-            filename_cover = _normalize_cover_filename(row[filename_cover_index])
+            filename_cover = normalize_cover_filename(row[filename_cover_index])
         if module_dl_index is not None and len(row) > module_dl_index:
             module_dl = str(row[module_dl_index]).strip().lower()
         if ingame_ini_index is not None and len(row) > ingame_ini_index:
