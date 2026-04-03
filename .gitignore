@@ -13,3 +13,9 @@ dist/
 temp_version.txt
 *.log
 *.exe
+
+# Tests and local test artifacts
+tests/
+tests_runtime/
+.pytest_cache/
+pytest-cache-files-*/

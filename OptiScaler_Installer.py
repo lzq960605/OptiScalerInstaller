@@ -24,6 +24,7 @@ from installer.app import (
     rtss_notice,
     strip_markup_text,
 )
+from installer.app.poster_queue import PosterQueueController
 from installer.common.poster_loader import PosterImageLoader, PosterLoaderConfig
 from installer.config import ini_utils
 from installer.data import sheet_loader
@@ -496,6 +497,16 @@ class OptiManagerApp:
             )
         )
         self._image_executor = ThreadPoolExecutor(max_workers=IMAGE_MAX_WORKERS, thread_name_prefix="cover-loader")
+        self._poster_queue = PosterQueueController(
+            root=self.root,
+            executor=self._image_executor,
+            loader=self._poster_loader.load,
+            max_workers=IMAGE_MAX_WORKERS,
+            retry_delay_ms=IMAGE_RETRY_DELAY_MS,
+            get_visible_indices=self._visible_game_indices,
+            is_scan_in_progress=lambda: self._scan_in_progress,
+            on_image_ready=self._apply_loaded_poster,
+        )
         self._task_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="general-task")
         self._download_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="archive-download")
         self._app_update_manager = app_update.InstallerUpdateManager(
@@ -506,19 +517,11 @@ class OptiManagerApp:
             on_update_failed=lambda: self._run_post_sheet_startup(True),
             on_exit_requested=self._on_close,
         )
-        self._pending_image_jobs: dict = {}
-        self._inflight_image_futures: dict = {}
-        self._failed_image_jobs: dict = {}
-        self._delayed_image_retry_after_ids: dict[int, str] = {}
-        self._render_generation = 0
-        self._image_queue_after_id = None
         self._games_scrollregion_after_id = None
         self._games_viewport_after_id = None
         self._overflow_fit_after_id = None
-        self._initial_image_pass = True
         self._scan_in_progress = False
         self._auto_scan_active = False
-        self._retry_attempted = False
         self._status_indicator_after_id = None
         self._status_indicator_pulse_visible = True
         self._status_indicator_pulse_colors = (_STATUS_INDICATOR_LOADING, _STATUS_INDICATOR_LOADING_DIM)
@@ -927,14 +930,6 @@ class OptiManagerApp:
             return
 
         try:
-            if self._image_queue_after_id is not None:
-                self.root.after_cancel(self._image_queue_after_id)
-                self._image_queue_after_id = None
-        except Exception:
-            pass
-        for index in list(self._delayed_image_retry_after_ids.keys()):
-            self._cancel_delayed_image_retry(index)
-        try:
             if self._games_scrollregion_after_id is not None:
                 self.root.after_cancel(self._games_scrollregion_after_id)
                 self._games_scrollregion_after_id = None
@@ -956,6 +951,10 @@ class OptiManagerApp:
             if self._status_indicator_after_id is not None:
                 self.root.after_cancel(self._status_indicator_after_id)
                 self._status_indicator_after_id = None
+        except Exception:
+            pass
+        try:
+            self._poster_queue.shutdown()
         except Exception:
             pass
         try:
@@ -1868,15 +1867,8 @@ class OptiManagerApp:
     # ------------------------------------------------------------------
 
     def _clear_cards(self, keep_selection=False):
-        self._render_generation += 1
-        self._pending_image_jobs.clear()
-        self._inflight_image_futures.clear()
-        self._failed_image_jobs.clear()
-        for index in list(self._delayed_image_retry_after_ids.keys()):
-            self._cancel_delayed_image_retry(index)
-        self._initial_image_pass = True
+        self._poster_queue.begin_new_render()
         self._scan_in_progress = False
-        self._retry_attempted = False
         for frame in self.card_frames:
             frame.destroy()
         self.card_frames.clear()
@@ -2023,7 +2015,7 @@ class OptiManagerApp:
     def _end_resize_visual_suppression(self):
         self._resize_visual_after_id = None
         self._resize_in_progress = False
-        self._pump_image_jobs()
+        self._poster_queue.pump()
 
     def _on_root_resize(self, _event=None):
         self._schedule_reflow_for_resize()
@@ -2145,7 +2137,7 @@ class OptiManagerApp:
         self._schedule_reflow_for_resize()
         self._schedule_overflow_fit_check()
         if not self._resize_in_progress:
-            self._pump_image_jobs()
+            self._poster_queue.pump()
 
     def _schedule_games_viewport_update(self, delay_ms: int = 30):
         try:
@@ -2157,7 +2149,7 @@ class OptiManagerApp:
 
     def _run_games_viewport_update(self):
         self._games_viewport_after_id = None
-        self._pump_image_jobs()
+        self._poster_queue.pump()
 
     def _on_games_scrollbar_command(self, *args):
         canvas = getattr(self.games_scroll, "_parent_canvas", None)
@@ -2287,7 +2279,7 @@ class OptiManagerApp:
 
         self._schedule_games_scrollregion_refresh()
 
-        self._pump_image_jobs()
+        self._poster_queue.pump()
 
     def _make_card(self, index: int, game: dict) -> ctk.CTkFrame:
         card = ctk.CTkFrame(
@@ -2359,7 +2351,7 @@ class OptiManagerApp:
         self._set_card_placeholder(index, img_label, game["display"])
         cover_url = game.get("cover_url", "")
         filename_cover = game.get("filename_cover", "")
-        self._queue_card_image_fetch(
+        self._poster_queue.queue(
             index,
             img_label,
             game["display"],
@@ -2372,60 +2364,6 @@ class OptiManagerApp:
     def _set_card_placeholder(self, index: int, label: ctk.CTkLabel, title: str):
         pil_img = self._poster_loader.make_placeholder_image()
         self.root.after(0, lambda idx=index, l=label, img=pil_img: self._set_card_base_image(idx, l, img))
-
-    def _cancel_delayed_image_retry(self, index: int):
-        after_id = self._delayed_image_retry_after_ids.pop(index, None)
-        if after_id is None:
-            return
-        try:
-            self.root.after_cancel(after_id)
-        except Exception:
-            pass
-
-    def _schedule_delayed_image_retry(self, job: dict):
-        index = int(job.get("index", -1))
-        if index < 0:
-            return
-        if int(job.get("delayed_retry_count", 0)) >= 1:
-            return
-        if index in self._delayed_image_retry_after_ids:
-            return
-
-        retry_job = dict(job)
-        retry_job["delayed_retry_count"] = int(job.get("delayed_retry_count", 0)) + 1
-
-        def _requeue():
-            self._delayed_image_retry_after_ids.pop(index, None)
-            try:
-                if not self.root.winfo_exists():
-                    return
-            except tk.TclError:
-                return
-
-            if retry_job.get("generation") != self._render_generation:
-                return
-
-            self._pending_image_jobs[index] = retry_job
-            self._pump_image_jobs()
-
-        try:
-            after_id = self.root.after(max(0, IMAGE_RETRY_DELAY_MS), _requeue)
-        except Exception:
-            return
-        self._delayed_image_retry_after_ids[index] = after_id
-
-    def _queue_card_image_fetch(self, index: int, label: ctk.CTkLabel, title: str, cover_filename: str, url: str):
-        self._cancel_delayed_image_retry(index)
-        self._pending_image_jobs[index] = {
-            "index": index,
-            "label": label,
-            "title": title,
-            "cover_filename": cover_filename,
-            "url": url,
-            "generation": self._render_generation,
-            "delayed_retry_count": 0,
-        }
-        self._pump_image_jobs()
 
     def _visible_game_indices(self) -> set:
         total = len(self.found_exe_list)
@@ -2454,87 +2392,7 @@ class OptiManagerApp:
                     visible.add(idx)
         return visible
 
-    def _image_priority_key(self, index: int, visible: set) -> tuple:
-        if self._initial_image_pass:
-            return (index,)
-
-        is_visible = 0 if index in visible else 1
-        if visible:
-            nearest = min(abs(index - i) for i in visible)
-        else:
-            nearest = index
-        return (is_visible, nearest, index)
-
-    def _pump_image_jobs(self):
-        self._collect_completed_image_jobs()
-
-        if not self._pending_image_jobs and not self._inflight_image_futures and not self._scan_in_progress:
-            self._initial_image_pass = False
-
-        # Once all downloads finish and scan is done, retry failures exactly once.
-        if (
-            not self._pending_image_jobs
-            and not self._inflight_image_futures
-            and not self._scan_in_progress
-            and self._failed_image_jobs
-            and not self._retry_attempted
-        ):
-            self._retry_attempted = True
-            logging.info("Retrying %d failed poster download(s)...", len(self._failed_image_jobs))
-            for job in self._failed_image_jobs.values():
-                job["generation"] = self._render_generation
-            self._pending_image_jobs.update(self._failed_image_jobs)
-            self._failed_image_jobs.clear()
-
-        visible = self._visible_game_indices()
-
-        while self._pending_image_jobs and len(self._inflight_image_futures) < IMAGE_MAX_WORKERS:
-            next_index = min(self._pending_image_jobs.keys(), key=lambda idx: self._image_priority_key(idx, visible))
-            job = self._pending_image_jobs.pop(next_index)
-
-            # Skip stale jobs from previous renders.
-            if job["generation"] != self._render_generation:
-                continue
-
-            future = self._image_executor.submit(
-                self._load_poster_image_worker,
-                job["title"],
-                job.get("cover_filename", ""),
-                job["url"],
-            )
-            self._inflight_image_futures[future] = job
-
-        if (self._pending_image_jobs or self._inflight_image_futures) and self._image_queue_after_id is None:
-            self._image_queue_after_id = self.root.after(120, self._image_queue_tick)
-
-    def _collect_completed_image_jobs(self):
-        completed = []
-        for future, job in list(self._inflight_image_futures.items()):
-            if future.done():
-                completed.append((future, job))
-                self._inflight_image_futures.pop(future, None)
-
-        for future, job in completed:
-            try:
-                load_result = future.result()
-                self._apply_loaded_poster(job["index"], job["label"], job["generation"], load_result.image)
-                if load_result.should_retry:
-                    self._schedule_delayed_image_retry(job)
-            except Exception as exc:
-                logging.warning("Poster download failed (will retry): %s", exc)
-                # Store for one automatic retry after all jobs are done.
-                self._failed_image_jobs[job["index"]] = job
-
-    def _image_queue_tick(self):
-        self._image_queue_after_id = None
-        self._pump_image_jobs()
-
-    def _load_poster_image_worker(self, title: str, cover_filename: str, url: str):
-        return self._poster_loader.load(title, cover_filename, url)
-
-    def _apply_loaded_poster(self, index: int, label: ctk.CTkLabel, generation: int, pil_img: Image.Image):
-        if generation != self._render_generation:
-            return
+    def _apply_loaded_poster(self, index: int, label: ctk.CTkLabel, pil_img: Image.Image):
         self._set_card_base_image(index, label, pil_img)
 
     def _set_selected_game(self, index: int):
@@ -2636,7 +2494,7 @@ class OptiManagerApp:
         else:
             self._show_scan_result_popup(self.txt.main.manual_scan_no_results)
         # Trigger retry check now that scan is done.
-        self._pump_image_jobs()
+        self._poster_queue.pump()
 
     def _add_game_card_incremental(self, game: dict):
         """Append one game to the list and immediately render + queue its cover download."""
