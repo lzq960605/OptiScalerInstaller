@@ -289,7 +289,6 @@ APP_CACHE_DIR = LOCAL_APPDATA_DIR / "OptiScalerInstaller"
 OPTISCALER_CACHE_DIR = APP_CACHE_DIR / "cache" / "optiscaler"
 FSR4_CACHE_DIR = APP_CACHE_DIR / "cache" / "fsr4"
 INSTALLER_LATEST_RELEASE_URL = "https://github.com/onehoon/OptiScalerInstaller/releases/latest"
-POST_UPDATE_RELEASE_MARKER_PATH = APP_CACHE_DIR / "post_update_release_marker.txt"
 FSR4_SKIP_GPU_RULE = "*rx 90*"
 APP_BASE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
 ASSETS_DIR = APP_BASE_DIR / "assets"
@@ -373,52 +372,6 @@ def _build_expected_installer_exe_name(version_text: str, fallback_url: str = ""
     if fallback_name.lower().endswith(".exe"):
         return fallback_name
     return ""
-
-
-def _versions_match(version_a: str, version_b: str) -> bool:
-    parsed_a = _parse_version_tuple(version_a)
-    parsed_b = _parse_version_tuple(version_b)
-    if parsed_a and parsed_b:
-        return parsed_a == parsed_b
-    return str(version_a or "").strip().lower() == str(version_b or "").strip().lower()
-
-
-def _is_version_newer(version_a: str, version_b: str) -> bool:
-    parsed_a = _parse_version_tuple(version_a)
-    parsed_b = _parse_version_tuple(version_b)
-    if parsed_a and parsed_b:
-        return parsed_a > parsed_b
-    return False
-
-
-def _queue_post_update_release_page(version_text: str) -> None:
-    normalized = str(version_text or "").strip()
-    if not normalized:
-        return
-
-    try:
-        APP_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        POST_UPDATE_RELEASE_MARKER_PATH.write_text(normalized, encoding="utf-8")
-        logging.info("[APP] Queued latest release page for first launch of version %s", normalized)
-    except Exception:
-        logging.exception("[APP] Failed to queue latest release page for version %s", normalized)
-
-
-def _read_post_update_release_marker() -> str:
-    try:
-        if not POST_UPDATE_RELEASE_MARKER_PATH.exists():
-            return ""
-        return POST_UPDATE_RELEASE_MARKER_PATH.read_text(encoding="utf-8").strip()
-    except Exception:
-        logging.exception("[APP] Failed to read post-update release marker")
-        return ""
-
-
-def _clear_post_update_release_marker() -> None:
-    try:
-        POST_UPDATE_RELEASE_MARKER_PATH.unlink(missing_ok=True)
-    except Exception:
-        logging.exception("[APP] Failed to clear post-update release marker")
 
 
 def _format_optiscaler_version_display_name(raw_name: str) -> str:
@@ -712,7 +665,6 @@ class OptiManagerApp:
         self._status_indicator_pulse_colors = (_STATUS_INDICATOR_LOADING, _STATUS_INDICATOR_LOADING_DIM)
         self._scan_meta_label_width = self._measure_meta_label_width(self._get_supported_games_meta_label_text())
         self.setup_ui()
-        self.root.after(900, self._handle_post_update_release_page)
         # Fetch GPU info asynchronously to avoid blocking startup on slow PowerShell
         try:
             self._task_executor.submit(self._fetch_gpu_info_async)
@@ -981,39 +933,17 @@ class OptiManagerApp:
             title = "오류" if USE_KOREAN else "Error"
             messagebox.showerror(title, detail)
 
-    def _handle_post_update_release_page(self) -> None:
-        pending_version = _read_post_update_release_marker()
-        if not pending_version:
-            return
-
-        if _versions_match(pending_version, APP_VERSION):
-            try:
-                logging.info(
-                    "[APP] Opening latest release page for first launch after update to version %s",
-                    APP_VERSION,
+    def _open_installer_latest_release_page(self) -> None:
+        try:
+            logging.info("[APP] Opening latest installer release page before self-update")
+            opened = webbrowser.open(INSTALLER_LATEST_RELEASE_URL)
+            if not opened:
+                logging.warning(
+                    "[APP] Browser reported failure while opening latest release page: %s",
+                    INSTALLER_LATEST_RELEASE_URL,
                 )
-                opened = webbrowser.open(INSTALLER_LATEST_RELEASE_URL)
-                if not opened:
-                    logging.warning(
-                        "[APP] Browser reported failure while opening latest release page: %s",
-                        INSTALLER_LATEST_RELEASE_URL,
-                    )
-            except Exception:
-                logging.exception(
-                    "[APP] Failed to open latest release page for first launch of version %s",
-                    APP_VERSION,
-                )
-            finally:
-                _clear_post_update_release_marker()
-            return
-
-        if _is_version_newer(APP_VERSION, pending_version):
-            logging.info(
-                "[APP] Clearing stale post-update release marker for version %s while running %s",
-                pending_version,
-                APP_VERSION,
-            )
-            _clear_post_update_release_marker()
+        except Exception:
+            logging.exception("[APP] Failed to open latest installer release page")
 
     def _set_scan_status_message(self, text: str = "", text_color: str = _SCAN_STATUS_TEXT):
         if not hasattr(self, "lbl_scan_status") or not self.lbl_scan_status.winfo_exists():
@@ -1776,7 +1706,6 @@ class OptiManagerApp:
         if not target.exists():
             raise FileNotFoundError(f"Updated installer not found: {target}")
 
-        _queue_post_update_release_page(latest_version)
         logging.info("[APP] Launching updated installer v%s from %s", latest_version, target)
         subprocess.Popen(
             [str(target)],
@@ -1816,6 +1745,7 @@ class OptiManagerApp:
                     if not self._confirm_app_update(str(latest_info.get("version", "")).strip()):
                         logging.info("[APP] User declined installer update to v%s", latest_info.get("version", ""))
                         return False
+                    self._open_installer_latest_release_page()
                     return self._start_app_update(latest_info)
         except Exception as e:
             logging.warning("[APP] Version check failed: %s", e)
