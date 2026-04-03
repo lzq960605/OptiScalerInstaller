@@ -36,7 +36,6 @@ class MainUiStrings:
     status_gpu_select: str
     scan_section_title: str
     browse_button: str
-    supported_games_label: str
     supported_games_link: str
     install_section_title: str
     install_button: str
@@ -147,7 +146,6 @@ _STRINGS_BY_LANG: dict[Lang, AppStrings] = {
             status_gpu_select="GPU 선택",
             scan_section_title="1. 게임 폴더 스캔",
             browse_button="폴더 선택",
-            supported_games_label="설치된 지원 게임:",
             supported_games_link="지원 게임 목록 보기",
             install_section_title="2. 설치 정보",
             install_button="설치",
@@ -246,7 +244,6 @@ _STRINGS_BY_LANG: dict[Lang, AppStrings] = {
             status_gpu_select="GPU Select",
             scan_section_title="1. Scan Game Folder",
             browse_button="Browse...",
-            supported_games_label="Installed Supported Games:",
             supported_games_link="Check Supported Games",
             install_section_title="2. Install Information",
             install_button="Install",

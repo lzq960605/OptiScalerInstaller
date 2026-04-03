@@ -5,7 +5,6 @@ import tempfile
 import zipfile
 import tkinter as tk
 import time
-import tkinter.font as tkfont
 import math
 import hashlib
 from contextlib import contextmanager
@@ -470,7 +469,6 @@ _INSTALL_BUTTON_DISABLED = "#4B4338"
 _INSTALL_BUTTON_BORDER_DISABLED = "#5B5246"
 _INSTALL_BUTTON_TEXT = "#0B121A"
 _STATUS_TEXT = "#C5CFDB"
-_SECTION_LABEL_TEXT = "#C5CFDB"
 _SELECTED_GAME_HIGHLIGHT = "#FFCB62"
 _SCAN_STATUS_TEXT = "#AEB9C8"
 _STATUS_INDICATOR_LOADING = "#7EE1AA"
@@ -484,7 +482,6 @@ _STATUS_INDICATOR_PULSE_MS = 620
 _CONTENT_SIDE_PAD = 20
 _META_RIGHT_PAD = 5
 _SCAN_META_RIGHT_INSET = _CONTENT_SIDE_PAD + _META_RIGHT_PAD
-_META_VALUE_GAP = 8
 _LINK_ACTIVE = _SELECTED_GAME_HIGHLIGHT
 _LINK_HOVER = "#FFE08F"
 _CARD_BG = "#181B21"
@@ -640,7 +637,6 @@ class OptiManagerApp:
         self._status_indicator_after_id = None
         self._status_indicator_pulse_visible = True
         self._status_indicator_pulse_colors = (_STATUS_INDICATOR_LOADING, _STATUS_INDICATOR_LOADING_DIM)
-        self._scan_meta_label_width = self._measure_meta_label_width(self._get_supported_games_meta_label_text())
         self.setup_ui()
         # Fetch GPU info asynchronously to avoid blocking startup on slow PowerShell
         try:
@@ -772,7 +768,6 @@ class OptiManagerApp:
         if hasattr(self, "btn_select_folder") and self.btn_select_folder:
             self.btn_select_folder.configure(state="disabled")
         text = self.txt.gpu.unsupported_message
-        self._set_supported_games_value(None)
         self._set_scan_status_message(text, "#FF8A8A")
         self._clear_cards()
         if hasattr(self, "info_text") and self.info_text:
@@ -811,7 +806,6 @@ class OptiManagerApp:
         if hasattr(self, "gpu_lbl") and self.gpu_lbl:
             self.gpu_lbl.configure(text=self._format_gpu_label_text(self.gpu_info))
 
-        self._set_supported_games_value(None)
         self._set_scan_status_message("")
         self._update_sheet_status()
         self._update_install_button_state()
@@ -835,7 +829,6 @@ class OptiManagerApp:
                 self.gpu_info = self.txt.main.waiting_for_gpu_selection
                 if hasattr(self, "gpu_lbl") and self.gpu_lbl:
                     self.gpu_lbl.configure(text=self._format_gpu_label_text(self.gpu_info))
-                self._set_supported_games_value(None)
                 self._set_scan_status_message("")
                 self._update_sheet_status()
                 self._update_install_button_state()
@@ -873,28 +866,6 @@ class OptiManagerApp:
                 return False
 
         return True
-
-    def _get_supported_games_meta_label_text(self) -> str:
-        return self.txt.main.supported_games_label
-
-    def _measure_meta_label_width(self, *candidate_texts: str) -> int:
-        try:
-            meta_font = tkfont.Font(family=FONT_UI, size=12, weight="bold")
-            candidates = tuple(text for text in candidate_texts if text)
-            if not candidates:
-                candidates = (self._get_supported_games_meta_label_text(),)
-            return max(meta_font.measure(text) for text in candidates) + 2
-        except Exception:
-            return 120
-
-    def _align_supported_games_count_label(self):
-        return
-
-    def _set_supported_games_value(self, value: Optional[object], text_color: str = _SECTION_LABEL_TEXT):
-        if not hasattr(self, "lbl_supported_games_value") or not self.lbl_supported_games_value.winfo_exists():
-            return
-        display_value = "" if value is None else str(value)
-        self.lbl_supported_games_value.configure(text=display_value, text_color=text_color)
 
     def _set_supported_games_wiki_link_hover(self, hovered: bool) -> None:
         if not hasattr(self, "lbl_supported_games_wiki_link") or not self.lbl_supported_games_wiki_link.winfo_exists():
@@ -1606,7 +1577,6 @@ class OptiManagerApp:
         self._begin_scan(scan_paths, is_auto=True)
 
     def _begin_scan(self, scan_paths: list[str], *, is_auto: bool) -> None:
-        self._set_supported_games_value(0)
         self._set_scan_status_message(self.txt.main.scanning, "#F1F5F9")
         self.found_exe_list = []
         self._clear_cards()
@@ -1736,31 +1706,6 @@ class OptiManagerApp:
             command=self.select_game_folder,
         )
         self.btn_select_folder.grid(row=0, column=1, padx=4, pady=(8, 8), sticky="w")
-
-        supported_games_meta = ctk.CTkFrame(row, fg_color="transparent", corner_radius=0)
-        supported_games_meta.grid(row=0, column=2, padx=(8, _SCAN_META_RIGHT_INSET), pady=(8, 8), sticky="ew")
-        supported_games_meta.grid_columnconfigure(0, weight=1)
-
-        self.lbl_supported_games_label = ctk.CTkLabel(
-            supported_games_meta,
-            text=self._get_supported_games_meta_label_text(),
-            width=self._scan_meta_label_width,
-            font=ctk.CTkFont(family=FONT_UI, size=12, weight="bold"),
-            text_color=_SECTION_LABEL_TEXT,
-            anchor="e",
-            justify="right",
-        )
-        self.lbl_supported_games_label.grid(row=0, column=1, padx=(0, _META_VALUE_GAP), sticky="e")
-
-        self.lbl_supported_games_value = ctk.CTkLabel(
-            supported_games_meta,
-            text="",
-            font=ctk.CTkFont(family=FONT_UI, size=12, weight="bold"),
-            text_color=_SECTION_LABEL_TEXT,
-            anchor="e",
-            justify="right",
-        )
-        self.lbl_supported_games_value.grid(row=0, column=2, sticky="e")
 
         self.lbl_scan_status = ctk.CTkLabel(
             row,
@@ -1929,7 +1874,6 @@ class OptiManagerApp:
         self._refresh_optiscaler_archive_info_ui()
         self._set_information_text(self.txt.main.select_game_hint)
         self._update_install_button_state()
-        self.root.after(0, self._align_supported_games_count_label)
 
     def _refresh_optiscaler_archive_info_ui(self):
         # Do not show placeholder version text before sheet load completes.
@@ -1988,14 +1932,12 @@ class OptiManagerApp:
                 self.txt.main.status_gpu_config,
                 _STATUS_INDICATOR_OFFLINE,
             )
-            self.root.after(0, self._align_supported_games_count_label)
             return
         if self._gpu_selection_pending:
             self._set_status_badge_state(
                 self.txt.main.status_gpu_select,
                 _STATUS_INDICATOR_WARNING,
             )
-            self.root.after(0, self._align_supported_games_count_label)
             return
         if self.sheet_loading:
             self._set_status_badge_state(
@@ -2003,7 +1945,6 @@ class OptiManagerApp:
                 _STATUS_INDICATOR_LOADING,
                 pulse=True,
             )
-            self.root.after(0, self._align_supported_games_count_label)
             return
         if self.sheet_status:
             self._set_status_badge_state(
@@ -2015,7 +1956,6 @@ class OptiManagerApp:
                 self.txt.main.status_game_db,
                 _STATUS_INDICATOR_OFFLINE,
             )
-        self.root.after(0, self._align_supported_games_count_label)
 
     # ------------------------------------------------------------------
     # Information text
@@ -2213,7 +2153,6 @@ class OptiManagerApp:
 
     def _on_root_resize(self, _event=None):
         self._schedule_reflow_for_resize()
-        self.root.after_idle(self._align_supported_games_count_label)
 
     def _configure_card_columns(self, cols: int):
         max_cols = max(self._grid_cols_current, cols)
@@ -2992,7 +2931,6 @@ class OptiManagerApp:
         self._auto_scan_active = False
         self.btn_select_folder.configure(state="normal")
         count = len(self.found_exe_list)
-        self._set_supported_games_value(count)
         self._set_scan_status_message("")
         if count > 0:
             self._set_information_text(self.txt.main.select_game_hint)
@@ -3028,8 +2966,6 @@ class OptiManagerApp:
 
         # Expand scroll region so newly added row is reachable.
         self._schedule_games_scrollregion_refresh()
-
-        self._set_supported_games_value(len(self.found_exe_list))
 
     # ------------------------------------------------------------------
     # Install
