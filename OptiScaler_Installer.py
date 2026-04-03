@@ -9,6 +9,7 @@ import time
 import tkinter.font as tkfont
 import math
 import hashlib
+from contextlib import contextmanager
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote, urlparse
 from tkinter import filedialog, messagebox
@@ -426,6 +427,20 @@ def _normalize_cover_filename(value: str) -> str:
     if suffix not in ALLOWED_COVER_IMAGE_EXTENSIONS:
         return ""
     return raw_name
+
+
+@contextmanager
+def _temporary_logger_level(logger_names: tuple[str, ...], level: int):
+    previous_levels: list[tuple[logging.Logger, int]] = []
+    try:
+        for logger_name in logger_names:
+            logger = logging.getLogger(logger_name)
+            previous_levels.append((logger, logger.level))
+            logger.setLevel(level)
+        yield
+    finally:
+        for logger, previous_level in reversed(previous_levels):
+            logger.setLevel(previous_level)
 
 
 def _make_default_poster_base(width: int, height: int) -> Image.Image:
@@ -2825,8 +2840,7 @@ class OptiManagerApp:
             if ENABLE_POSTER_CACHE:
                 self._image_cache_put(cache_key, pil_img)
             return pil_img
-        except Exception as exc:
-            logging.warning("Failed to load cover image from %s: %s", image_path, exc)
+        except Exception:
             return None
 
     def _load_prepared_image_from_bytes(self, image_bytes: bytes, cache_key: str, source_label: str) -> Optional[Image.Image]:
@@ -2840,14 +2854,14 @@ class OptiManagerApp:
             if ENABLE_POSTER_CACHE:
                 self._image_cache_put(cache_key, pil_img)
             return pil_img
-        except Exception as exc:
-            logging.warning("Failed to decode cover image from %s: %s", source_label, exc)
+        except Exception:
             return None
 
     def _download_image_bytes(self, url: str) -> bytes:
-        with self._image_session.get(url, timeout=IMAGE_TIMEOUT_SECONDS, stream=True) as response:
-            response.raise_for_status()
-            return b"".join(response.iter_content(chunk_size=65536))
+        with _temporary_logger_level(("urllib3.connectionpool", "urllib3.util.retry"), logging.ERROR):
+            with self._image_session.get(url, timeout=IMAGE_TIMEOUT_SECONDS, stream=True) as response:
+                response.raise_for_status()
+                return b"".join(response.iter_content(chunk_size=65536))
 
     def _store_cover_cache_bytes(self, cover_filename: str, image_bytes: bytes) -> Optional[Path]:
         cache_path = self._get_cover_cache_path(cover_filename)
@@ -3037,9 +3051,8 @@ class OptiManagerApp:
                     return pil_img, False, False
                 try:
                     disk_cache_path.unlink()
-                    logging.info("Removed invalid cached cover image: %s", disk_cache_path)
                 except OSError:
-                    logging.warning("Failed to remove invalid cached cover image: %s", disk_cache_path, exc_info=True)
+                    pass
 
             repo_url = self._build_cover_repo_raw_url(normalized_cover_filename)
             if repo_url:
@@ -3051,11 +3064,10 @@ class OptiManagerApp:
                     try:
                         self._store_cover_cache_bytes(normalized_cover_filename, image_bytes)
                     except Exception:
-                        logging.warning("Failed to cache cover image for %s", normalized_cover_filename, exc_info=True)
+                        pass
                     return pil_img, False, False
-                except Exception as exc:
+                except Exception:
                     repo_failed = True
-                    logging.warning("Failed to load cover image from covers repo %s: %s", repo_url, exc)
 
         cache_key = self._poster_cache_key("cover_url", url, title=title)
         cached_image = self._image_cache_get(cache_key) if ENABLE_POSTER_CACHE else None
@@ -3072,8 +3084,7 @@ class OptiManagerApp:
             if pil_img is None:
                 raise RuntimeError("Downloaded cover image could not be decoded")
             return pil_img, False, False
-        except Exception as exc:
-            logging.warning("Failed to load cover image from %s: %s", url, exc)
+        except Exception:
             fallback = self._default_poster_base.copy().convert("RGBA")
             return fallback, True, True
 
