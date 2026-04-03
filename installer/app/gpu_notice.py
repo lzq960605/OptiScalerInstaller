@@ -19,7 +19,7 @@ class GpuNoticeTheme:
     accent_hover_color: str
     font_ui: str
     body_text_color: str = "#E3EAF3"
-    warning_text_color: str = "#FF4D4F"
+    warning_text_color: str = "#FFCB62"
     button_text_color: str = "#000000"
 
 

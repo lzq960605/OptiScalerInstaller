@@ -18,7 +18,7 @@ class MessagePopupTheme:
     accent_hover_color: str
     font_ui: str
     body_text_color: str = "#E3EAF3"
-    emphasis_color: str = "#FF4D4F"
+    emphasis_color: str = "#FFCB62"
     button_text_color: str = "#0B121A"
 
 

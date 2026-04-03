@@ -2075,7 +2075,7 @@ class OptiManagerApp:
             text_widget,
             raw_text,
             emphasis_tag="info_red_emphasis",
-            emphasis_color="#FF4D4F",
+            emphasis_color=_STATUS_INDICATOR_WARNING,
             emphasis_size_offset=1,
             emphasis_weight="bold",
             trim_emphasis=True,
