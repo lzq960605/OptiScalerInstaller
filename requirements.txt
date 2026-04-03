@@ -4,3 +4,4 @@ Pillow
 py7zr
 python-dotenv
 pytest
+PyInstaller
