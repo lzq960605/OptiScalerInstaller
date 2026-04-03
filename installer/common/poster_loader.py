@@ -11,7 +11,7 @@ from typing import Mapping, Optional
 from urllib.parse import quote, urlparse
 
 import requests
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageOps
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
@@ -86,7 +86,7 @@ def _load_default_poster_base(default_poster_path: Path, width: int, height: int
 
 
 def _prepare_cover_image(img: Image.Image, target_w: int, target_h: int) -> Image.Image:
-    """Convert, fit/crop, and lightly sharpen cover art for crisp UI rendering."""
+    """Convert and fit/crop cover art for UI rendering."""
     if img.mode not in {"RGB", "RGBA"}:
         img = img.convert("RGBA")
     else:
@@ -102,9 +102,6 @@ def _prepare_cover_image(img: Image.Image, target_w: int, target_h: int) -> Imag
         method=Image.Resampling.LANCZOS,
         centering=(0.5, 0.5),
     )
-    img = img.filter(ImageFilter.UnsharpMask(radius=0.6, percent=60, threshold=4))
-    img = ImageEnhance.Color(img).enhance(1.1)
-    img = ImageEnhance.Contrast(img).enhance(1.05)
     return img.convert("RGBA")
 
 

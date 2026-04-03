@@ -258,7 +258,7 @@ _STRINGS_BY_LANG: dict[Lang, AppStrings] = {
             manual_scan_no_results="No supported games found in the selected folder.",
         ),
         dialogs=DialogStrings(
-            installer_notice_title="Installer Notice",
+            installer_notice_title="Notice",
             wiki_not_configured_detail="Supported games wiki URL is not configured.",
             wiki_open_failed_detail="Failed to open the supported games wiki.",
             close_while_installing_body="Installation is in progress. Please wait.",
