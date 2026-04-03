@@ -7,6 +7,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from ..i18n import Lang
+
 if os.name == "nt":
     import winreg
 
@@ -124,9 +126,9 @@ def _resolve_matched_file(file_lookup: dict[str, str], required_files: list[str]
     return ""
 
 
-def _build_game_record(root_dir: str, matched_file: str, entry: GameDbEntry, *, use_korean: bool) -> GameRecord:
-    korean_display = entry.get("game_name_kr", "") if use_korean else ""
-    korean_information = entry.get("information_kr", "") if use_korean else ""
+def _build_game_record(root_dir: str, matched_file: str, entry: GameDbEntry, *, lang: Lang) -> GameRecord:
+    korean_display = entry.get("game_name_kr", "") if lang == "ko" else ""
+    korean_information = entry.get("information_kr", "") if lang == "ko" else ""
     return {
         "path": root_dir,
         "exe": matched_file,
@@ -161,7 +163,7 @@ def scan_game_folders(
     game_folders: Iterable[str],
     game_db: dict[str, GameDbEntry],
     *,
-    use_korean: bool = False,
+    lang: Lang = "en",
     is_game_supported: GameSupportPredicate | None = None,
     logger=None,
 ) -> list[GameRecord]:
@@ -219,7 +221,7 @@ def scan_game_folders(
                         root_dir,
                         matched_file,
                         entry,
-                        use_korean=use_korean,
+                        lang=lang,
                     )
                 )
 
@@ -253,7 +255,7 @@ def run_scan_job(
     game_folders: Iterable[str],
     game_db: dict[str, GameDbEntry],
     *,
-    use_korean: bool = False,
+    lang: Lang = "en",
     is_game_supported: GameSupportPredicate | None = None,
     schedule: SchedulerCallback | None = None,
     on_game_found: GameFoundCallback | None = None,
@@ -265,7 +267,7 @@ def run_scan_job(
         found_games = scan_game_folders(
             game_folders,
             game_db,
-            use_korean=use_korean,
+            lang=lang,
             is_game_supported=is_game_supported,
             logger=logger,
         )

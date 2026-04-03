@@ -7,7 +7,7 @@ from typing import Optional, Sequence, TYPE_CHECKING
 import customtkinter as ctk
 from .popup_markup import create_popup_markup_text, estimate_wrapped_text_lines
 from .popup_utils import PopupFadeController, close_modal_popup, create_modal_popup, present_modal_popup
-from ..i18n import get_app_strings, lang_from_bool
+from ..i18n import AppStrings
 
 if TYPE_CHECKING:
     from ..system.gpu_service import GpuAdapterChoice
@@ -54,19 +54,15 @@ NVIDIA_BUTTON_THEME = GpuVendorButtonTheme(
 )
 
 
-def get_unsupported_gpu_title(use_korean: bool) -> str:
-    return get_app_strings(lang_from_bool(use_korean)).gpu.unsupported_title
+def get_unsupported_gpu_title(strings: AppStrings) -> str:
+    return strings.gpu.unsupported_title
 
 
-def get_unsupported_gpu_message(use_korean: bool) -> str:
-    return get_app_strings(lang_from_bool(use_korean)).gpu.unsupported_message
+def get_unsupported_gpu_message(strings: AppStrings) -> str:
+    return strings.gpu.unsupported_message
 
 
-def _get_dual_gpu_selection_message(use_korean: bool) -> str:
-    return get_app_strings(lang_from_bool(use_korean)).gpu.dual_selection_message
-
-
-def _get_vendor_display_name(vendor: str, use_korean: bool) -> str:
+def _get_vendor_display_name(vendor: str, strings: AppStrings) -> str:
     normalized = str(vendor or "").strip().lower()
     if normalized == "nvidia":
         return "NVIDIA"
@@ -74,7 +70,7 @@ def _get_vendor_display_name(vendor: str, use_korean: bool) -> str:
         return "AMD"
     if normalized == "intel":
         return "Intel"
-    return get_app_strings(lang_from_bool(use_korean)).gpu.vendor_unknown
+    return strings.gpu.vendor_unknown
 
 
 def _get_vendor_button_theme(vendor: str, theme: GpuNoticeTheme) -> GpuVendorButtonTheme:
@@ -137,10 +133,9 @@ def _resolve_popup_width(root: ctk.CTk, min_width_px: int) -> int:
 
 def show_unsupported_gpu_notice(
     root: ctk.CTk,
-    use_korean: bool,
+    strings: AppStrings,
     theme: GpuNoticeTheme,
 ) -> None:
-    strings = get_app_strings(lang_from_bool(use_korean))
     desired_popup_width = _resolve_popup_width(root, UNSUPPORTED_GPU_POPUP_MIN_W)
     message_width = max(280, desired_popup_width - 88)
 
@@ -202,10 +197,9 @@ def show_unsupported_gpu_notice(
 def select_dual_gpu_adapter(
     root: ctk.CTk,
     adapters: Sequence["GpuAdapterChoice"],
-    use_korean: bool,
+    strings: AppStrings,
     theme: GpuNoticeTheme,
 ) -> Optional["GpuAdapterChoice"]:
-    strings = get_app_strings(lang_from_bool(use_korean))
     adapter_choices = list(adapters[:2])
     if len(adapter_choices) < 2:
         return None
@@ -262,7 +256,7 @@ def select_dual_gpu_adapter(
 
     for col_idx, adapter in enumerate(adapter_choices):
         button_theme = _get_vendor_button_theme(adapter.vendor, theme)
-        vendor_label = _get_vendor_display_name(adapter.vendor, use_korean)
+        vendor_label = _get_vendor_display_name(adapter.vendor, strings)
         model_label = str(adapter.display_name or adapter.model_name or "").strip()
         button_text = vendor_label if not model_label else f"{vendor_label}\n{model_label}"
         btn = ctk.CTkButton(

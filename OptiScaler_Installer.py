@@ -512,7 +512,7 @@ class OptiManagerApp:
         self._app_update_manager = app_update.InstallerUpdateManager(
             self.root,
             current_version=APP_VERSION,
-            use_korean=USE_KOREAN,
+            strings=self.txt,
             on_busy_state_changed=self._update_install_button_state,
             on_update_failed=lambda: self._run_post_sheet_startup(True),
             on_exit_requested=self._on_close,
@@ -604,7 +604,6 @@ class OptiManagerApp:
             min_text_chars=58,
             max_text_chars=110,
             emphasis_font_size=13,
-            emphasis_weight="normal",
             root_width_fallback=WINDOW_W,
             root_height_fallback=WINDOW_H,
         )
@@ -659,13 +658,13 @@ class OptiManagerApp:
         self._set_scan_status_message(text, "#FF8A8A")
         self._clear_cards()
         if hasattr(self, "info_text") and self.info_text:
-            self._set_information_text(gpu_notice.get_unsupported_gpu_message(USE_KOREAN))
+            self._set_information_text(gpu_notice.get_unsupported_gpu_message(self.txt))
         self._update_selected_game_header()
         self._update_sheet_status()
         self._update_install_button_state()
         if not self._multi_gpu_popup_shown:
             self._multi_gpu_popup_shown = True
-            gpu_notice.show_unsupported_gpu_notice(self.root, USE_KOREAN, GPU_NOTICE_THEME)
+            gpu_notice.show_unsupported_gpu_notice(self.root, self.txt, GPU_NOTICE_THEME)
 
     def _apply_selected_gpu(
         self,
@@ -723,7 +722,7 @@ class OptiManagerApp:
                 selected_adapter = gpu_notice.select_dual_gpu_adapter(
                     root=self.root,
                     adapters=tuple(gpu_context.adapters[:2]),
-                    use_korean=USE_KOREAN,
+                    strings=self.txt,
                     theme=GPU_NOTICE_THEME,
                 )
                 if selected_adapter is None:
@@ -840,7 +839,7 @@ class OptiManagerApp:
             return ""
 
         game = self.found_exe_list[self.selected_game_index]
-        if USE_KOREAN:
+        if self.lang == "ko":
             game_name = str(game.get("display", "") or game.get("game_name_kr", "") or game.get("game_name", "")).strip()
         else:
             game_name = str(game.get("game_name", "") or game.get("display", "")).strip()
@@ -1462,7 +1461,7 @@ class OptiManagerApp:
             game_scanner.run_scan_job,
             scan_paths,
             self.game_db,
-            use_korean=USE_KOREAN,
+            lang=self.lang,
             is_game_supported=self._is_game_supported_for_current_gpu,
             schedule=lambda callback: self.root.after(0, callback),
             on_game_found=self._on_game_found,

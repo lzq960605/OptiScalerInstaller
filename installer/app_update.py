@@ -13,7 +13,7 @@ import webbrowser
 import zipfile
 
 from .common import subprocess_no_window_kwargs
-from .i18n import get_app_strings, lang_from_bool
+from .i18n import AppStrings
 from .install import services as installer_services
 
 
@@ -146,15 +146,14 @@ class InstallerUpdateManager:
         root,
         *,
         current_version: str,
-        use_korean: bool,
+        strings: AppStrings,
         on_busy_state_changed: Optional[Callable[[], None]] = None,
         on_update_failed: Optional[Callable[[], None]] = None,
         on_exit_requested: Optional[Callable[[], None]] = None,
     ) -> None:
         self.root = root
         self.current_version = str(current_version or "")
-        self.use_korean = bool(use_korean)
-        self._strings = get_app_strings(lang_from_bool(self.use_korean))
+        self._strings = strings
         self._on_busy_state_changed = on_busy_state_changed
         self._on_update_failed = on_update_failed
         self._on_exit_requested = on_exit_requested
