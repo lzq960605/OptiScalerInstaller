@@ -110,6 +110,7 @@ class PrecheckStrings:
     ultimate_asi_loader_detected_template: str
     renodx_detected_template: str
     mod_detected_template: str
+    rdr2_blocked_mod_popup_template: str
 
 
 @dataclass(frozen=True)
@@ -221,6 +222,7 @@ _STRINGS_BY_LANG: dict[Lang, AppStrings] = {
             ultimate_asi_loader_detected_template="Ultimate ASI Loader 관련 파일이 감지되었습니다: {detected}",
             renodx_detected_template="RenoDX addon 파일이 감지되었습니다: {detected}",
             mod_detected_template="MOD 관련 파일이 감지되었습니다: {detected}",
+            rdr2_blocked_mod_popup_template="[RED][DOT]현재 RDR2 설치는 MOD가 설치되지 않은 상태일 경우만 지원됩니다.[BR][DOT]MOD 지원 설치는 추가 확인 후 지원 예정입니다.[BR][DOT]감지된 MOD는 다음과 같습니다.[END][BR]{mods}",
         ),
     ),
     "en": AppStrings(
@@ -318,6 +320,7 @@ _STRINGS_BY_LANG: dict[Lang, AppStrings] = {
             ultimate_asi_loader_detected_template="Ultimate ASI Loader related files were detected: {detected}",
             renodx_detected_template="RenoDX addon files were detected: {detected}",
             mod_detected_template="MOD-related files were detected: {detected}",
+            rdr2_blocked_mod_popup_template="[RED][DOT]RDR2 installation is currently supported only when no MODs are installed.[BR][DOT]Support for installing with MODs enabled is planned after additional verification.[BR][DOT]The following MODs were detected:[END][BR]{mods}",
         ),
     ),
 }

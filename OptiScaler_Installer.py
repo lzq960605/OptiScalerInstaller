@@ -688,6 +688,29 @@ class OptiManagerApp:
             root_height_fallback=WINDOW_H,
         )
 
+    def _show_precheck_popup(
+        self,
+        message_text: str,
+        on_close: Optional[Callable[[], None]] = None,
+    ) -> None:
+        message_popup.show_message_popup(
+            root=self.root,
+            message_text=message_text,
+            theme=MESSAGE_POPUP_THEME,
+            title=self.txt.common.warning,
+            confirm_text=self.txt.common.ok,
+            on_close=(lambda: self.root.after_idle(on_close)) if callable(on_close) else None,
+            allow_window_close=True,
+            scrollable=False,
+            debug_name="precheck popup",
+            preferred_text_chars=72,
+            min_text_chars=58,
+            max_text_chars=110,
+            emphasis_font_size=13,
+            root_width_fallback=WINDOW_W,
+            root_height_fallback=WINDOW_H,
+        )
+
     def _is_multi_gpu_block_active(self) -> bool:
         return self.gpu_count > MAX_SUPPORTED_GPU_COUNT
 
@@ -1836,6 +1859,8 @@ class OptiManagerApp:
             game = self.found_exe_list[index]
             self._set_information_text(game.get("information", ""))
             self._run_install_precheck(game)
+            if not self.install_precheck_ok:
+                return
             popup_msg = pick_sheet_text(game, "popup", self.lang)
             if popup_msg:
                 def _on_confirm():
@@ -1857,6 +1882,7 @@ class OptiManagerApp:
     def _run_install_precheck(self, game_data: dict):
         logger = get_prefixed_logger(str(game_data.get("game_name", "unknown")).strip() or "unknown")
         handler = get_game_handler(game_data)
+        popup_message = ""
         try:
             logger.info("Running install precheck with handler: %s", getattr(handler, "handler_key", "default"))
             precheck = handler.run_install_precheck(game_data, self.lang == "ko", logger)
@@ -1870,6 +1896,7 @@ class OptiManagerApp:
                 logger.info("Install precheck resolved DLL name: %s", self.install_precheck_dll_name)
             else:
                 self.install_precheck_error = handler.format_precheck_error(precheck, self.lang == "ko")
+                popup_message = handler.get_precheck_popup_message(precheck, self.lang == "ko")
                 logger.warning("Install precheck failed: %s", precheck.raw_error_message)
         except Exception as exc:
             self.install_precheck_ok = False
@@ -1879,6 +1906,10 @@ class OptiManagerApp:
         finally:
             self.install_precheck_running = False
             self._update_install_button_state()
+
+        if popup_message:
+            logger.info("Showing install precheck popup")
+            self.root.after_idle(lambda msg=popup_message: self._show_precheck_popup(msg))
 
     # ------------------------------------------------------------------
     # File dialogs

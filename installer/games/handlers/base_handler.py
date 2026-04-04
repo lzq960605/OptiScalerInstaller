@@ -82,6 +82,9 @@ class BaseGameHandler:
     def format_precheck_error(self, precheck: InstallPrecheckResult, use_korean: bool) -> str:
         return _translate_default_precheck_error(precheck.raw_error_message, use_korean)
 
+    def get_precheck_popup_message(self, precheck: InstallPrecheckResult, use_korean: bool) -> str:
+        return ""
+
     def run_install_precheck(
         self,
         game_data: Mapping[str, Any],

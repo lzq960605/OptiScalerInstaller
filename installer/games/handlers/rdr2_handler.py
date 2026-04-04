@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from ...i18n import lang_from_bool
+from ...i18n import get_app_strings, lang_from_bool
 from ...install import OPTISCALER_ASI_NAME
 
 from .base_handler import BaseGameHandler, InstallPlan, InstallPrecheckResult
@@ -23,8 +23,22 @@ class Rdr2BlockedModRule:
     patterns: tuple[str, ...]
 
 
-# Add the two final mod signatures here once they are confirmed.
-RDR2_BLOCKED_MOD_RULES: tuple[Rdr2BlockedModRule, ...] = ()
+RDR2_BLOCKED_MOD_RULES: tuple[Rdr2BlockedModRule, ...] = (
+    Rdr2BlockedModRule(
+        name="ScriptHookRDR2",
+        patterns=(
+            "scripthookrdr2.dll",
+            "scripthookrdr2.log",
+        ),
+    ),
+    Rdr2BlockedModRule(
+        name="Lenny's Mod Loader RDR2",
+        patterns=(
+            "vfs.asi",
+            "lml.ini",
+        ),
+    ),
+)
 
 
 def _normalize_file_relpath(path: Path, base_dir: Path) -> str:
@@ -67,6 +81,16 @@ def _build_rdr2_blocked_mod_error(detected_mods: tuple[str, ...], use_korean: bo
     if lang_from_bool(use_korean) == "ko":
         return f"RDR2 설치를 진행할 수 없습니다. 호환되지 않는 MOD가 감지되었습니다: {detected_text}"
     return f"RDR2 installation cannot continue because incompatible mods were detected: {detected_text}"
+
+
+def _build_rdr2_blocked_mod_popup(detected_mods: tuple[str, ...], use_korean: bool) -> str:
+    normalized_mods = tuple(str(mod).strip() for mod in detected_mods if str(mod).strip())
+    if not normalized_mods:
+        return ""
+
+    strings = get_app_strings(lang_from_bool(use_korean))
+    mods_markup = "[BR]".join(f"[INDENT]{mod_name}" for mod_name in normalized_mods)
+    return strings.precheck.rdr2_blocked_mod_popup_template.format(mods=mods_markup)
 
 
 def _build_rdr2_missing_xml_error(xml_path: Path, use_korean: bool) -> str:
@@ -135,6 +159,16 @@ class Rdr2Handler(BaseGameHandler):
             blocked_mods = tuple(str(mod).strip() for mod in precheck.error_context.get("detected_mods", ()) if str(mod).strip())
             return _build_rdr2_blocked_mod_error(blocked_mods, use_korean)
         return super().format_precheck_error(precheck, use_korean)
+
+    def get_precheck_popup_message(self, precheck: InstallPrecheckResult, use_korean: bool) -> str:
+        if precheck.error_code != "blocked_mods":
+            return ""
+        blocked_mods = tuple(
+            str(mod).strip()
+            for mod in precheck.error_context.get("detected_mods", ())
+            if str(mod).strip()
+        )
+        return _build_rdr2_blocked_mod_popup(blocked_mods, use_korean)
 
     def prepare_install_plan(
         self,
