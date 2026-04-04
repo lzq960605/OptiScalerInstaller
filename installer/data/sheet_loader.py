@@ -33,6 +33,29 @@ def _pick_match_anchor(match_files: list[str]) -> str:
     return match_files[0] if match_files else ""
 
 
+def _parse_ini_header_target(var_name: str) -> tuple[str, str] | None:
+    raw_name = str(var_name or "").strip()
+    if not raw_name:
+        return None
+
+    if "|" in raw_name:
+        section, key = raw_name.split("|", 1)
+        section = section.strip().strip("[]")
+        key = key.strip()
+        if section and key:
+            return section, key
+        return None
+
+    bracket_match = re.match(r"^\s*\[([^\]]+)\]\s*(.+?)\s*$", raw_name)
+    if bracket_match:
+        section = bracket_match.group(1).strip()
+        key = bracket_match.group(2).strip()
+        if section and key:
+            return section, key
+
+    return None
+
+
 def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
     url = f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}/export?format=csv&gid={gid}"
 
@@ -275,14 +298,9 @@ def load_game_db_from_public_sheet(spreadsheet_id, gid=0):
                 val = row[col_i].strip()
                 if not val:
                     continue
-                if "|" in var_name:
-                    section, key = var_name.split("|", 1)
-                    section = section.strip().strip("[]")
-                    key = key.strip()
-                    if section and key:
-                        ini_settings[(section, key)] = val
-                    else:
-                        ini_settings[var_name] = val
+                parsed_target = _parse_ini_header_target(var_name)
+                if parsed_target:
+                    ini_settings[parsed_target] = val
                 else:
                     ini_settings[var_name] = val
 

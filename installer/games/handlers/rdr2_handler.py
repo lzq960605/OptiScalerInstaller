@@ -1,17 +1,159 @@
 from __future__ import annotations
 
-from .base_handler import BaseGameHandler
+import fnmatch
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Mapping
+
+from ...i18n import lang_from_bool
+from ...install import OPTISCALER_ASI_NAME
+
+from .base_handler import BaseGameHandler, InstallPlan, InstallPrecheckResult
+from .install_precheck import build_mod_conflict_notice, scan_target_mod_conflicts
+from .rdr2_xml import apply_rdr2_system_xml_settings, resolve_rdr2_system_xml_path
+
+
+EXPECTED_RDR2_EXE_NAME = "rdr2.exe"
+EXPECTED_RDR2_GAME_NAME = "Red Dead Redemption 2"
+
+
+@dataclass(frozen=True)
+class Rdr2BlockedModRule:
+    name: str
+    patterns: tuple[str, ...]
+
+
+# Add the two final mod signatures here once they are confirmed.
+RDR2_BLOCKED_MOD_RULES: tuple[Rdr2BlockedModRule, ...] = ()
+
+
+def _normalize_file_relpath(path: Path, base_dir: Path) -> str:
+    return str(path.relative_to(base_dir)).replace("\\", "/")
+
+
+def _scan_rdr2_blocked_mods(target_path: str, logger=None) -> tuple[str, ...]:
+    target_dir = Path(str(target_path or "").strip())
+    if not target_dir.is_dir() or not RDR2_BLOCKED_MOD_RULES:
+        return ()
+
+    try:
+        file_entries = [
+            (
+                file_path.name.lower(),
+                _normalize_file_relpath(file_path, target_dir).lower(),
+            )
+            for file_path in target_dir.rglob("*")
+            if file_path.is_file()
+        ]
+    except Exception:
+        if logger:
+            logger.exception("Failed to scan RDR2 blocked mods in %s", target_dir)
+        return ()
+
+    detected: list[str] = []
+    for rule in RDR2_BLOCKED_MOD_RULES:
+        if any(
+            fnmatch.fnmatch(file_name, pattern.lower()) or fnmatch.fnmatch(rel_path, pattern.lower())
+            for file_name, rel_path in file_entries
+            for pattern in rule.patterns
+        ):
+            detected.append(rule.name)
+
+    return tuple(dict.fromkeys(detected))
+
+
+def _build_rdr2_blocked_mod_error(detected_mods: tuple[str, ...], use_korean: bool) -> str:
+    detected_text = ", ".join(detected_mods)
+    if lang_from_bool(use_korean) == "ko":
+        return f"RDR2 설치를 진행할 수 없습니다. 호환되지 않는 MOD가 감지되었습니다: {detected_text}"
+    return f"RDR2 installation cannot continue because incompatible mods were detected: {detected_text}"
+
+
+def _build_rdr2_missing_xml_error(xml_path: Path, use_korean: bool) -> str:
+    if lang_from_bool(use_korean) == "ko":
+        return (
+            "RDR2 system.xml 파일을 찾을 수 없어 설치를 진행할 수 없습니다. "
+            f"게임을 한 번 실행해 설정 파일을 생성한 뒤 다시 시도해 주세요: {xml_path}"
+        )
+    return (
+        "RDR2 installation cannot continue because system.xml was not found. "
+        f"Launch the game once so it creates the settings file, then try again: {xml_path}"
+    )
 
 
 class Rdr2Handler(BaseGameHandler):
     """Dedicated hook surface for Red Dead Redemption 2 specific install logic."""
 
     handler_key = "rdr2"
-    aliases = (
-        "rdr2",
-        "red dead redemption 2",
-        "red dead redemption ii",
-        "playrdr2.exe",
-        "rdr2.exe",
-    )
+    aliases = ()
+
+    def matches(self, game_data: Mapping[str, Any]) -> bool:
+        game_name = str(game_data.get("game_name", "") or "").strip().lower()
+        exe_name = Path(str(game_data.get("exe", "") or game_data.get("exe_path", "") or "")).name.strip().lower()
+        return game_name == EXPECTED_RDR2_GAME_NAME.lower() and exe_name == EXPECTED_RDR2_EXE_NAME
+
+    def run_install_precheck(
+        self,
+        game_data: Mapping[str, Any],
+        use_korean: bool,
+        logger,
+    ) -> InstallPrecheckResult:
+        target_path = str(game_data.get("path", "")).strip()
+        conflict_findings = scan_target_mod_conflicts(target_path, logger=logger)
+        notice_message = build_mod_conflict_notice(conflict_findings, use_korean)
+        xml_path = resolve_rdr2_system_xml_path()
+
+        if not xml_path.is_file():
+            return InstallPrecheckResult(
+                ok=False,
+                error_message=_build_rdr2_missing_xml_error(xml_path, use_korean),
+                notice_message=notice_message,
+            )
+
+        blocked_mods = _scan_rdr2_blocked_mods(target_path, logger=logger)
+        if blocked_mods:
+            return InstallPrecheckResult(
+                ok=False,
+                error_message=_build_rdr2_blocked_mod_error(blocked_mods, use_korean),
+                notice_message=notice_message,
+            )
+
+        return InstallPrecheckResult(
+            ok=True,
+            resolved_dll_name=OPTISCALER_ASI_NAME,
+            notice_message=notice_message,
+        )
+
+    def prepare_install_plan(
+        self,
+        app: Any,
+        game_data: Mapping[str, Any],
+        source_archive: str,
+        resolved_dll_name: str,
+        logger,
+    ) -> InstallPlan:
+        plan_game_data = dict(game_data)
+        plan_game_data["ultimate_asi_loader"] = True
+        plan_game_data["dll_name"] = OPTISCALER_ASI_NAME
+        if logger:
+            logger.info(
+                "RDR2 handler forcing Ultimate ASI Loader and OptiScaler filename: %s",
+                OPTISCALER_ASI_NAME,
+            )
+        return InstallPlan(
+            game_data=plan_game_data,
+            source_archive=str(source_archive or ""),
+            resolved_dll_name=OPTISCALER_ASI_NAME,
+        )
+
+    def finalize_install(
+        self,
+        app: Any,
+        game_data: Mapping[str, Any],
+        target_path: str,
+        logger,
+    ) -> None:
+        xml_path = apply_rdr2_system_xml_settings(logger=logger)
+        if logger:
+            logger.info("RDR2 handler finished XML update: %s", xml_path)
 

@@ -29,13 +29,13 @@ from installer.common.poster_loader import PosterImageLoader, PosterLoaderConfig
 from installer.config import ini_utils
 from installer.data import sheet_loader
 from installer.games import scanner as game_scanner
+from installer.games.handlers import get_game_handler
 from installer.i18n import (
     detect_ui_language,
     get_app_strings,
     is_korean,
     pick_module_message,
     pick_sheet_text,
-    translate_default_precheck_error,
 )
 from installer.install import (
     OPTISCALER_ASI_NAME,
@@ -97,7 +97,7 @@ def _iter_env_file_candidates() -> tuple[Path, ...]:
 
 
  # Application Version
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.3.1"
 # Install flow supports up to two detected GPUs. Dual-GPU requires explicit user selection.
 MAX_SUPPORTED_GPU_COUNT = 2
 
@@ -2429,24 +2429,25 @@ class OptiManagerApp:
             self._update_install_button_state()
 
     def _run_install_precheck(self, game_data: dict):
-        target_path = str(game_data.get("path", "")).strip()
-        preferred_dll = str(game_data.get("dll_name", "")).strip()
         logger = get_prefixed_logger(str(game_data.get("game_name", "unknown")).strip() or "unknown")
+        handler = get_game_handler(game_data)
         try:
-            if bool(game_data.get("ultimate_asi_loader")):
-                resolved_name = OPTISCALER_ASI_NAME
-                logger.info("Install precheck selected Ultimate ASI Loader mode: %s", resolved_name)
+            logger.info("Running install precheck with handler: %s", getattr(handler, "handler_key", "default"))
+            precheck = handler.run_install_precheck(game_data, self.lang == "ko", logger)
+            self.install_precheck_ok = bool(precheck.ok)
+            self.install_precheck_error = str(precheck.error_message or "")
+            self.install_precheck_dll_name = str(precheck.resolved_dll_name or "")
+            if precheck.notice_message:
+                logger.info("Install precheck notice: %s", precheck.notice_message)
+            if precheck.ok:
+                logger.info("Install precheck resolved DLL name: %s", self.install_precheck_dll_name)
             else:
-                resolved_name = installer_services.resolve_proxy_dll_name(target_path, preferred_dll, logger=logger)
-            self.install_precheck_ok = True
-            self.install_precheck_error = ""
-            self.install_precheck_dll_name = resolved_name
+                logger.warning("Install precheck failed: %s", self.install_precheck_error)
         except Exception as exc:
-            raw_error = translate_default_precheck_error(str(exc), self.lang)
             self.install_precheck_ok = False
-            self.install_precheck_error = raw_error
+            self.install_precheck_error = str(exc)
             self.install_precheck_dll_name = ""
-            logger.warning("Install precheck failed: %s", raw_error)
+            logger.exception("Install precheck failed unexpectedly: %s", exc)
         finally:
             self.install_precheck_running = False
             self._update_install_button_state()
@@ -2599,10 +2600,17 @@ class OptiManagerApp:
         )
 
     def _apply_optiscaler_worker(self, game_data, source_archive, resolved_dll_name, fsr4_source_archive, fsr4_required):
-        target_path = game_data["path"]
         game_name = str(game_data.get("game_name", "unknown")).strip() or "unknown"
         logger = get_prefixed_logger(game_name)
         try:
+            handler = get_game_handler(game_data)
+            logger.info("Using game handler: %s", getattr(handler, "handler_key", "default"))
+            install_plan = handler.prepare_install_plan(self, game_data, source_archive, resolved_dll_name, logger)
+            game_data = dict(install_plan.game_data)
+            source_archive = str(install_plan.source_archive or source_archive)
+            resolved_dll_name = str(install_plan.resolved_dll_name or resolved_dll_name)
+
+            target_path = game_data["path"]
             use_ultimate_asi_loader = bool(game_data.get("ultimate_asi_loader"))
             if use_ultimate_asi_loader and game_data.get("reframework_url"):
                 raise RuntimeError(
@@ -2751,6 +2759,7 @@ class OptiManagerApp:
             else:
                 logger.info("Skipped FSR4 install for current GPU/game selection")
 
+            handler.finalize_install(self, game_data, target_path, logger)
             logger.info("Install completed")
             self.root.after(
                 0,
