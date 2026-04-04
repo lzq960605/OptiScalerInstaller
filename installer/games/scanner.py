@@ -16,9 +16,6 @@ if os.name == "nt":
 GameDbEntry = dict[str, Any]
 GameRecord = dict[str, Any]
 GameSupportPredicate = Callable[[GameDbEntry], bool]
-GameFoundCallback = Callable[[GameRecord], None]
-CompletionCallback = Callable[[], None]
-SchedulerCallback = Callable[[Callable[[], None]], Any]
 
 
 def _append_existing_unique_path(paths: list[str], seen: set[str], candidate: Path) -> None:
@@ -241,67 +238,3 @@ def scan_game_folders(
             logger=logger,
         )
     )
-
-
-def _schedule_callback(
-    callback: CompletionCallback | None,
-    *,
-    schedule: SchedulerCallback | None = None,
-    logger=None,
-    description: str = "scan callback",
-) -> None:
-    if not callable(callback):
-        return
-
-    try:
-        if schedule is None:
-            callback()
-        else:
-            schedule(callback)
-    except Exception:
-        if logger:
-            logger.exception("Failed to schedule %s", description)
-        else:
-            logging.exception("Failed to schedule %s", description)
-
-
-def run_scan_job(
-    game_folders: Iterable[str],
-    game_db: dict[str, GameDbEntry],
-    *,
-    lang: Lang = "en",
-    is_game_supported: GameSupportPredicate | None = None,
-    schedule: SchedulerCallback | None = None,
-    on_game_found: GameFoundCallback | None = None,
-    on_complete: CompletionCallback | None = None,
-    logger=None,
-) -> None:
-    """Run the scan and emit callbacks as matches are discovered."""
-    try:
-        for game in iter_scan_game_folders(
-            game_folders,
-            game_db,
-            lang=lang,
-            is_game_supported=is_game_supported,
-            logger=logger,
-        ):
-            if not callable(on_game_found):
-                continue
-            _schedule_callback(
-                lambda game_record=game: on_game_found(game_record),
-                schedule=schedule,
-                logger=logger,
-                description="found-game callback",
-            )
-    except Exception:
-        if logger:
-            logger.exception("Scan worker error")
-        else:
-            logging.exception("Scan worker error")
-    finally:
-        _schedule_callback(
-            on_complete,
-            schedule=schedule,
-            logger=logger,
-            description="scan completion callback",
-        )

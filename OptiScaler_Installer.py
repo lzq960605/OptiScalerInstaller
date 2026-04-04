@@ -25,10 +25,10 @@ from installer.app import (
     strip_markup_text,
 )
 from installer.app.poster_queue import PosterQueueController
+from installer.app.scan_controller import ScanController, ScanControllerCallbacks
 from installer.common.poster_loader import PosterImageLoader, PosterLoaderConfig
 from installer.config import ini_utils
 from installer.data import sheet_loader
-from installer.games import scanner as game_scanner
 from installer.games.handlers import get_game_handler
 from installer.i18n import (
     detect_ui_language,
@@ -480,6 +480,7 @@ class OptiManagerApp:
         self._last_reflow_width = 0
         self._base_root_width = None
         self._ctk_images: list = []   # keep refs alive
+        self._scan_controller: Optional[ScanController] = None
         self._poster_loader = PosterImageLoader(
             PosterLoaderConfig(
                 cache_dir=COVER_CACHE_DIR,
@@ -504,7 +505,7 @@ class OptiManagerApp:
             max_workers=IMAGE_MAX_WORKERS,
             retry_delay_ms=IMAGE_RETRY_DELAY_MS,
             get_visible_indices=self._visible_game_indices,
-            is_scan_in_progress=lambda: self._scan_in_progress,
+            is_scan_in_progress=self._is_scan_in_progress,
             on_image_ready=self._apply_loaded_poster,
         )
         self._task_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="general-task")
@@ -520,12 +521,11 @@ class OptiManagerApp:
         self._games_scrollregion_after_id = None
         self._games_viewport_after_id = None
         self._overflow_fit_after_id = None
-        self._scan_in_progress = False
-        self._auto_scan_active = False
         self._status_indicator_after_id = None
         self._status_indicator_pulse_visible = True
         self._status_indicator_pulse_colors = (_STATUS_INDICATOR_LOADING, _STATUS_INDICATOR_LOADING_DIM)
         self.setup_ui()
+        self._create_scan_controller()
         # Fetch GPU info asynchronously to avoid blocking startup on slow PowerShell
         try:
             self._task_executor.submit(self._fetch_gpu_info_async)
@@ -1399,6 +1399,47 @@ class OptiManagerApp:
             root_height_fallback=WINDOW_H,
         )
 
+    def _is_scan_in_progress(self) -> bool:
+        controller = getattr(self, "_scan_controller", None)
+        return bool(controller and controller.is_scan_in_progress)
+
+    def _create_scan_controller(self) -> None:
+        self._scan_controller = ScanController(
+            executor=self._task_executor,
+            schedule=lambda callback: self.root.after(0, callback),
+            callbacks=ScanControllerCallbacks(
+                prepare_scan_ui=self._prepare_scan_ui,
+                reset_scan_results=self._reset_scan_results_for_new_scan,
+                add_game_card=self._add_game_card_incremental,
+                finish_scan_ui=self._finish_scan_ui,
+                pump_poster_queue=self._pump_poster_queue,
+                show_auto_scan_empty_popup=self._enqueue_initial_auto_scan_empty_popup,
+                show_manual_scan_empty_popup=self._show_manual_scan_empty_popup,
+                show_select_game_hint=self._show_select_game_hint,
+            ),
+            get_game_db=lambda: self.game_db,
+            get_lang=lambda: self.lang,
+            is_game_supported=self._is_game_supported_for_current_gpu,
+            logger=logging.getLogger(),
+        )
+
+    def _prepare_scan_ui(self) -> None:
+        self._set_scan_status_message(self.txt.main.scanning, "#F1F5F9")
+        self.btn_select_folder.configure(state="disabled")
+
+    def _finish_scan_ui(self) -> None:
+        self.btn_select_folder.configure(state="normal")
+        self._set_scan_status_message("")
+
+    def _pump_poster_queue(self) -> None:
+        self._poster_queue.pump()
+
+    def _show_manual_scan_empty_popup(self) -> None:
+        self._show_scan_result_popup(self.txt.main.manual_scan_no_results)
+
+    def _show_select_game_hint(self) -> None:
+        self._set_information_text(self.txt.main.select_game_hint)
+
     def _show_scan_result_popup(
         self,
         message_text: str,
@@ -1441,33 +1482,14 @@ class OptiManagerApp:
         """Kick off a silent auto-scan of known Steam/game directories."""
         if self.multi_gpu_blocked:
             return
-        scan_paths = game_scanner.get_auto_scan_paths(logger=logging.getLogger())
-        if not scan_paths:
-            self._enqueue_initial_auto_scan_empty_popup()
+        if self._scan_controller is None:
             return
-
-        self._begin_scan(scan_paths, is_auto=True)
+        self._scan_controller.start_auto_scan()
 
     def _begin_scan(self, scan_paths: list[str], *, is_auto: bool) -> None:
-        self._set_scan_status_message(self.txt.main.scanning, "#F1F5F9")
-        self.found_exe_list = []
-        self._clear_cards()
-        self._configure_card_columns(self._get_dynamic_column_count())
-        self._scan_in_progress = True
-        self._auto_scan_active = bool(is_auto)
-        self.btn_select_folder.configure(state="disabled")
-
-        self._task_executor.submit(
-            game_scanner.run_scan_job,
-            scan_paths,
-            self.game_db,
-            lang=self.lang,
-            is_game_supported=self._is_game_supported_for_current_gpu,
-            schedule=lambda callback: self.root.after(0, callback),
-            on_game_found=self._on_game_found,
-            on_complete=self._on_scan_complete,
-            logger=logging.getLogger(),
-        )
+        if self._scan_controller is None:
+            return
+        self._scan_controller.start_scan(scan_paths, is_auto=is_auto)
 
     # ------------------------------------------------------------------
     # UI builder
@@ -1865,23 +1887,33 @@ class OptiManagerApp:
     # Poster card grid
     # ------------------------------------------------------------------
 
-    def _clear_cards(self, keep_selection=False):
+    def _reset_selected_game_state(self) -> None:
+        self.selected_game_index = None
+        self._game_popup_confirmed = False
+        self.install_precheck_running = False
+        self.install_precheck_ok = False
+        self.install_precheck_error = ""
+        self.install_precheck_dll_name = ""
+        self._set_information_text("")
+
+    def _clear_rendered_cards(self) -> None:
         self._poster_queue.begin_new_render()
-        self._scan_in_progress = False
         for frame in self.card_frames:
             frame.destroy()
         self.card_frames.clear()
         self.card_items.clear()
         self._ctk_images.clear()  # Release stale PhotoImage refs to prevent accumulation.
-        if not keep_selection:
-            self.selected_game_index = None
-            self._game_popup_confirmed = False
-            self.install_precheck_running = False
-            self.install_precheck_ok = False
-            self.install_precheck_error = ""
-            self.install_precheck_dll_name = ""
-            self._set_information_text("")
         self._hovered_card_index = None
+
+    def _reset_scan_results_for_new_scan(self) -> None:
+        self.found_exe_list = []
+        self._clear_cards()
+        self._configure_card_columns(self._get_dynamic_column_count())
+
+    def _clear_cards(self, keep_selection=False):
+        self._clear_rendered_cards()
+        if not keep_selection:
+            self._reset_selected_game_state()
         self._update_selected_game_header()
         self._update_install_button_state()
 
@@ -2476,27 +2508,6 @@ class OptiManagerApp:
             return
 
         self._begin_scan([self.game_folder], is_auto=False)
-
-    def _on_game_found(self, game: dict):
-        """Main-thread callback: add one game card immediately as it is discovered."""
-        self._add_game_card_incremental(game)
-
-    def _on_scan_complete(self):
-        """Main-thread callback: finalize scan UI and kick any pending retry."""
-        self._scan_in_progress = False
-        is_auto = self._auto_scan_active
-        self._auto_scan_active = False
-        self.btn_select_folder.configure(state="normal")
-        count = len(self.found_exe_list)
-        self._set_scan_status_message("")
-        if count > 0:
-            self._set_information_text(self.txt.main.select_game_hint)
-        elif is_auto:
-            self._enqueue_initial_auto_scan_empty_popup()
-        else:
-            self._show_scan_result_popup(self.txt.main.manual_scan_no_results)
-        # Trigger retry check now that scan is done.
-        self._poster_queue.pump()
 
     def _add_game_card_incremental(self, game: dict):
         """Append one game to the list and immediately render + queue its cover download."""

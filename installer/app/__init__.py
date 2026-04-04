@@ -9,10 +9,13 @@ from .popup_markup import (
     strip_markup_text,
 )
 from .popup_utils import PopupFadeController, create_modal_popup, present_modal_popup
+from .scan_controller import ScanController, ScanControllerCallbacks
 
 __all__ = [
     "MessagePopupTheme",
     "PopupFadeController",
+    "ScanController",
+    "ScanControllerCallbacks",
     "create_modal_popup",
     "create_popup_markup_text",
     "estimate_wrapped_text_lines",
