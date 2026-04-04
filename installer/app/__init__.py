@@ -3,6 +3,7 @@
 from . import gpu_notice, message_popup, rtss_notice
 from .archive_controller import ArchivePreparationCallbacks, ArchivePreparationController, ArchivePreparationState
 from .game_db_controller import GameDbControllerCallbacks, GameDbLoadController, GameDbLoadResult
+from .gpu_flow_controller import GpuFlowCallbacks, GpuFlowController, GpuFlowState
 from .message_popup import MessagePopupTheme, show_message_popup
 from .popup_markup import (
     create_popup_markup_text,
@@ -21,6 +22,9 @@ __all__ = [
     "GameDbControllerCallbacks",
     "GameDbLoadController",
     "GameDbLoadResult",
+    "GpuFlowCallbacks",
+    "GpuFlowController",
+    "GpuFlowState",
     "MessagePopupTheme",
     "PopupFadeController",
     "ScanController",

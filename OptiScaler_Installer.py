@@ -22,6 +22,9 @@ from installer.app import (
     GameDbControllerCallbacks,
     GameDbLoadController,
     GameDbLoadResult,
+    GpuFlowCallbacks,
+    GpuFlowController,
+    GpuFlowState,
     gpu_notice,
     message_popup,
     render_markup_to_text_widget,
@@ -457,7 +460,6 @@ class OptiManagerApp:
         self.gpu_count = 0
         self.is_multi_gpu = False
         self.multi_gpu_blocked = False
-        self._multi_gpu_popup_shown = False
         self._gpu_selection_pending = False
         self._gpu_context: Optional[gpu_service.GpuContext] = None
         self._selected_gpu_adapter: Optional[gpu_service.GpuAdapterChoice] = None
@@ -483,6 +485,7 @@ class OptiManagerApp:
         self._ctk_images: list = []   # keep refs alive
         self._archive_controller: Optional[ArchivePreparationController] = None
         self._game_db_controller: Optional[GameDbLoadController] = None
+        self._gpu_flow_controller: Optional[GpuFlowController] = None
         self._scan_controller: Optional[ScanController] = None
         self._poster_loader = PosterImageLoader(
             PosterLoaderConfig(
@@ -542,12 +545,10 @@ class OptiManagerApp:
         self.setup_ui()
         self._create_archive_controller()
         self._create_game_db_controller()
+        self._create_gpu_flow_controller()
         self._create_scan_controller()
-        # Fetch GPU info asynchronously to avoid blocking startup on slow PowerShell
-        try:
-            self._task_executor.submit(self._fetch_gpu_info_async)
-        except Exception:
-            logging.exception("Failed to submit GPU info fetch task")
+        if self._gpu_flow_controller is not None:
+            self._gpu_flow_controller.start_detection()
         self.root.bind("<Configure>", self._on_root_resize)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         if self._startup_window_workaround_active:
@@ -593,14 +594,9 @@ class OptiManagerApp:
         except Exception:
             logging.debug("[APP] Failed to apply UMPC startup window workaround", exc_info=True)
 
-    def _normalize_gpu_info_text(self, value: object) -> str:
-        text = str(value or "").strip()
-        if not text or text.lower().startswith("unknown"):
-            return self.txt.main.unknown_gpu
-        return text
-
     def _format_gpu_label_text(self, gpu_info: str) -> str:
-        return self.txt.main.gpu_label_template.format(gpu=self._normalize_gpu_info_text(gpu_info))
+        normalized_gpu = str(gpu_info or "").strip() or self.txt.main.unknown_gpu
+        return self.txt.main.gpu_label_template.format(gpu=normalized_gpu)
 
     def _show_game_selection_popup(
         self,
@@ -625,134 +621,8 @@ class OptiManagerApp:
             root_height_fallback=WINDOW_H,
         )
 
-    def _fetch_gpu_info_async(self):
-        try:
-            gpu_context = gpu_service.detect_gpu_context(GPU_VENDOR_DB_GIDS, SHEET_GID)
-        except Exception:
-            logging.exception("Error fetching GPU info")
-            gpu_context = gpu_service.GpuContext(
-                gpu_names=[],
-                gpu_count=0,
-                gpu_info=self.txt.main.unknown_gpu,
-                selected_vendor="default",
-                selected_gid=SHEET_GID,
-                adapters=(),
-                selected_model_name="",
-            )
-        try:
-            self.root.after(
-                0,
-                lambda: self._update_gpu_ui(gpu_context),
-            )
-        except Exception:
-            logging.exception("Failed to schedule GPU UI update")
-
     def _is_multi_gpu_block_active(self) -> bool:
         return self.gpu_count > MAX_SUPPORTED_GPU_COUNT
-
-    def _apply_multi_gpu_block_state(self):
-        self.multi_gpu_blocked = self._is_multi_gpu_block_active()
-        if not self.multi_gpu_blocked:
-            return
-
-        self._gpu_selection_pending = False
-        self._selected_gpu_adapter = None
-        self._startup_flow.mark_post_sheet_startup_done()
-        self.sheet_loading = False
-        self.sheet_status = False
-        self.game_db = {}
-        self.module_download_links = {}
-        self.found_exe_list = []
-        self.selected_game_index = None
-        self.install_precheck_running = False
-        self.install_precheck_ok = False
-        self.install_precheck_error = ""
-        self.install_precheck_dll_name = ""
-
-        if hasattr(self, "btn_select_folder") and self.btn_select_folder:
-            self.btn_select_folder.configure(state="disabled")
-        text = self.txt.gpu.unsupported_message
-        self._set_scan_status_message(text, "#FF8A8A")
-        self._clear_cards()
-        if hasattr(self, "info_text") and self.info_text:
-            self._set_information_text(gpu_notice.get_unsupported_gpu_message(self.txt))
-        self._update_selected_game_header()
-        self._update_sheet_status()
-        self._update_install_button_state()
-        if not self._multi_gpu_popup_shown:
-            self._multi_gpu_popup_shown = True
-            gpu_notice.show_unsupported_gpu_notice(self.root, self.txt, GPU_NOTICE_THEME)
-
-    def _apply_selected_gpu(
-        self,
-        gpu_context: gpu_service.GpuContext,
-        selected_adapter: Optional[gpu_service.GpuAdapterChoice] = None,
-    ):
-        self._gpu_context = gpu_context
-        self.gpu_names = list(gpu_context.gpu_names or [])
-        self.gpu_count = max(0, int(gpu_context.gpu_count or 0))
-        self.is_multi_gpu = gpu_context.is_multi_gpu
-        self.multi_gpu_blocked = False
-        self._gpu_selection_pending = False
-        self._selected_gpu_adapter = selected_adapter
-
-        if selected_adapter is not None:
-            self.active_game_db_vendor = str(selected_adapter.vendor or "default")
-            self.active_game_db_gid = int(selected_adapter.selected_gid or SHEET_GID)
-            self.gpu_info = self._normalize_gpu_info_text(
-                selected_adapter.model_name or gpu_context.selected_model_name or gpu_context.gpu_info
-            )
-        else:
-            self.active_game_db_vendor = str(gpu_context.selected_vendor or "default")
-            self.active_game_db_gid = int(gpu_context.selected_gid or SHEET_GID)
-            self.gpu_info = self._normalize_gpu_info_text(gpu_context.selected_model_name or gpu_context.gpu_info)
-
-        if hasattr(self, "gpu_lbl") and self.gpu_lbl:
-            self.gpu_lbl.configure(text=self._format_gpu_label_text(self.gpu_info))
-
-        self._set_scan_status_message("")
-        self._update_sheet_status()
-        self._update_install_button_state()
-
-    def _update_gpu_ui(self, gpu_context: gpu_service.GpuContext):
-        try:
-            self._gpu_context = gpu_context
-            self.gpu_names = list(gpu_context.gpu_names or [])
-            self.gpu_count = max(0, int(gpu_context.gpu_count or 0))
-            self.is_multi_gpu = gpu_context.is_multi_gpu
-            self.multi_gpu_blocked = self._is_multi_gpu_block_active()
-            if self.multi_gpu_blocked:
-                self.gpu_info = self._normalize_gpu_info_text(gpu_context.gpu_info)
-                if hasattr(self, "gpu_lbl") and self.gpu_lbl:
-                    self.gpu_lbl.configure(text=self._format_gpu_label_text(self.gpu_info))
-                self._apply_multi_gpu_block_state()
-                return
-            if self.gpu_count == 2 and len(gpu_context.adapters or ()) >= 2:
-                self._gpu_selection_pending = True
-                self._selected_gpu_adapter = None
-                self.gpu_info = self.txt.main.waiting_for_gpu_selection
-                if hasattr(self, "gpu_lbl") and self.gpu_lbl:
-                    self.gpu_lbl.configure(text=self._format_gpu_label_text(self.gpu_info))
-                self._set_scan_status_message("")
-                self._update_sheet_status()
-                self._update_install_button_state()
-                selected_adapter = gpu_notice.select_dual_gpu_adapter(
-                    root=self.root,
-                    adapters=tuple(gpu_context.adapters[:2]),
-                    strings=self.txt,
-                    theme=GPU_NOTICE_THEME,
-                )
-                if selected_adapter is None:
-                    logging.warning("[GPU] Dual-GPU selection popup closed without a selection")
-                    return
-                self._apply_selected_gpu(gpu_context, selected_adapter)
-                self._start_game_db_load_async()
-                return
-            self._apply_selected_gpu(gpu_context)
-            self._start_game_db_load_async()
-            self._update_install_button_state()
-        except Exception:
-            logging.exception("Failed to update GPU UI")
 
     def _is_game_supported_for_current_gpu(self, game_data: dict) -> bool:
         return gpu_service.matches_gpu_rule(str(game_data.get("supported_gpu", "") or ""), self.gpu_info)
@@ -1113,6 +983,81 @@ class OptiManagerApp:
     def _is_scan_in_progress(self) -> bool:
         controller = getattr(self, "_scan_controller", None)
         return bool(controller and controller.is_scan_in_progress)
+
+    def _apply_gpu_flow_state(self, state: GpuFlowState) -> None:
+        self._gpu_context = state.gpu_context
+        self.gpu_names = list(state.gpu_names or ())
+        self.gpu_count = max(0, int(state.gpu_count or 0))
+        self.is_multi_gpu = bool(state.is_multi_gpu)
+        self.multi_gpu_blocked = bool(state.multi_gpu_blocked)
+        self._gpu_selection_pending = bool(state.gpu_selection_pending)
+        self._selected_gpu_adapter = state.selected_adapter
+
+        if state.game_db_vendor is not None:
+            self.active_game_db_vendor = str(state.game_db_vendor or "default")
+        if state.game_db_gid is not None:
+            self.active_game_db_gid = int(state.game_db_gid or SHEET_GID)
+
+        self.gpu_info = str(state.gpu_info or self.txt.main.unknown_gpu).strip() or self.txt.main.unknown_gpu
+        if hasattr(self, "gpu_lbl") and self.gpu_lbl:
+            self.gpu_lbl.configure(text=self._format_gpu_label_text(self.gpu_info))
+
+    def _handle_unsupported_gpu_block(self, scan_status_message: str, info_text: str) -> None:
+        self._startup_flow.mark_post_sheet_startup_done()
+        self.sheet_loading = False
+        self.sheet_status = False
+        self.game_db = {}
+        self.module_download_links = {}
+        self.found_exe_list = []
+        self.selected_game_index = None
+        self.install_precheck_running = False
+        self.install_precheck_ok = False
+        self.install_precheck_error = ""
+        self.install_precheck_dll_name = ""
+
+        if hasattr(self, "btn_select_folder") and self.btn_select_folder:
+            self.btn_select_folder.configure(state="disabled")
+        self._set_scan_status_message(scan_status_message, "#FF8A8A")
+        self._clear_cards()
+        if hasattr(self, "info_text") and self.info_text:
+            self._set_information_text(info_text)
+        self._update_selected_game_header()
+        self._update_sheet_status()
+        self._update_install_button_state()
+
+    def _create_gpu_flow_controller(self) -> None:
+        self._gpu_flow_controller = GpuFlowController(
+            executor=self._task_executor,
+            schedule=lambda callback: self.root.after(0, callback),
+            callbacks=GpuFlowCallbacks(
+                apply_state=self._apply_gpu_flow_state,
+                handle_unsupported_gpu=self._handle_unsupported_gpu_block,
+                set_scan_status_message=self._set_scan_status_message,
+                update_sheet_status=self._update_sheet_status,
+                update_install_button_state=self._update_install_button_state,
+                start_game_db_load=self._start_game_db_load_async,
+            ),
+            vendor_db_gids=GPU_VENDOR_DB_GIDS,
+            default_gid=SHEET_GID,
+            unknown_gpu_text=self.txt.main.unknown_gpu,
+            waiting_for_gpu_selection_text=self.txt.main.waiting_for_gpu_selection,
+            unsupported_gpu_message=self.txt.gpu.unsupported_message,
+            unsupported_gpu_info_text=gpu_notice.get_unsupported_gpu_message(self.txt),
+            detect_gpu_context=gpu_service.detect_gpu_context,
+            select_dual_gpu_adapter=lambda adapters: gpu_notice.select_dual_gpu_adapter(
+                root=self.root,
+                adapters=adapters,
+                strings=self.txt,
+                theme=GPU_NOTICE_THEME,
+            ),
+            show_unsupported_gpu_notice=lambda: gpu_notice.show_unsupported_gpu_notice(
+                self.root,
+                self.txt,
+                GPU_NOTICE_THEME,
+            ),
+            max_supported_gpu_count=MAX_SUPPORTED_GPU_COUNT,
+            logger=logging.getLogger(),
+        )
 
     def _create_archive_controller(self) -> None:
         self._archive_controller = ArchivePreparationController(
