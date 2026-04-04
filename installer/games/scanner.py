@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Iterator
 import logging
 import os
 import re
@@ -159,17 +159,16 @@ def _build_game_record(root_dir: str, matched_file: str, entry: GameDbEntry, *, 
     }
 
 
-def scan_game_folders(
+def iter_scan_game_folders(
     game_folders: Iterable[str],
     game_db: dict[str, GameDbEntry],
     *,
     lang: Lang = "en",
     is_game_supported: GameSupportPredicate | None = None,
     logger=None,
-) -> list[GameRecord]:
-    """Walk folders and return matched game entries sorted by sheet order."""
+) -> Iterator[GameRecord]:
+    """Walk folders and yield matched game entries as they are discovered."""
     supported_predicate = is_game_supported or (lambda _entry: True)
-    found_games: list[GameRecord] = []
     seen_paths: set[tuple[str, str]] = set()
     match_index = _build_match_index(game_db)
 
@@ -216,17 +215,32 @@ def scan_game_folders(
                     continue
 
                 matched_file = _resolve_matched_file(file_lookup, required_files, entry)
-                found_games.append(
-                    _build_game_record(
-                        root_dir,
-                        matched_file,
-                        entry,
-                        lang=lang,
-                    )
+                yield _build_game_record(
+                    root_dir,
+                    matched_file,
+                    entry,
+                    lang=lang,
                 )
 
-    found_games.sort(key=lambda game: int(game.get("sheet_order", 10**9)))
-    return found_games
+
+def scan_game_folders(
+    game_folders: Iterable[str],
+    game_db: dict[str, GameDbEntry],
+    *,
+    lang: Lang = "en",
+    is_game_supported: GameSupportPredicate | None = None,
+    logger=None,
+) -> list[GameRecord]:
+    """Walk folders and return matched game entries in discovery order."""
+    return list(
+        iter_scan_game_folders(
+            game_folders,
+            game_db,
+            lang=lang,
+            is_game_supported=is_game_supported,
+            logger=logger,
+        )
+    )
 
 
 def _schedule_callback(
@@ -262,16 +276,15 @@ def run_scan_job(
     on_complete: CompletionCallback | None = None,
     logger=None,
 ) -> None:
-    """Run the scan and emit completion callbacks via the provided scheduler."""
+    """Run the scan and emit callbacks as matches are discovered."""
     try:
-        found_games = scan_game_folders(
+        for game in iter_scan_game_folders(
             game_folders,
             game_db,
             lang=lang,
             is_game_supported=is_game_supported,
             logger=logger,
-        )
-        for game in found_games:
+        ):
             if not callable(on_game_found):
                 continue
             _schedule_callback(
