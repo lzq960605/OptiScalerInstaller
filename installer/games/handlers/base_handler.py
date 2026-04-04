@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
 from ...i18n import lang_from_bool, pick_sheet_text, translate_default_precheck_error
 from ...install import services as installer_services
 
-from .install_precheck import build_mod_conflict_notice, scan_target_mod_conflicts
+from .install_precheck import ModConflictFinding, build_mod_conflict_notice, scan_target_mod_conflicts
 
 
 def _normalize_handler_token(value: Any) -> str:
@@ -33,8 +33,10 @@ def _translate_default_precheck_error(raw_error: str, use_korean: bool) -> str:
 class InstallPrecheckResult:
     ok: bool
     resolved_dll_name: str = ""
-    error_message: str = ""
-    notice_message: str = ""
+    raw_error_message: str = ""
+    conflict_findings: tuple[ModConflictFinding, ...] = ()
+    error_code: str = ""
+    error_context: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -74,6 +76,12 @@ class BaseGameHandler:
     def get_after_install_guide_url(self, game_data: Mapping[str, Any]) -> str:
         return str(game_data.get("guidepage_after_installation", "") or "").strip()
 
+    def format_precheck_notice(self, precheck: InstallPrecheckResult, use_korean: bool) -> str:
+        return build_mod_conflict_notice(precheck.conflict_findings, use_korean)
+
+    def format_precheck_error(self, precheck: InstallPrecheckResult, use_korean: bool) -> str:
+        return _translate_default_precheck_error(precheck.raw_error_message, use_korean)
+
     def run_install_precheck(
         self,
         game_data: Mapping[str, Any],
@@ -83,19 +91,18 @@ class BaseGameHandler:
         target_path = str(game_data.get("path", "")).strip()
         preferred_dll = str(game_data.get("dll_name", "")).strip()
         conflict_findings = scan_target_mod_conflicts(target_path, logger=logger)
-        notice_message = build_mod_conflict_notice(conflict_findings, use_korean)
         try:
             resolved_name = installer_services.resolve_proxy_dll_name(target_path, preferred_dll, logger=logger)
             return InstallPrecheckResult(
                 ok=True,
                 resolved_dll_name=resolved_name,
-                notice_message=notice_message,
+                conflict_findings=conflict_findings,
             )
         except Exception as exc:
             return InstallPrecheckResult(
                 ok=False,
-                error_message=_translate_default_precheck_error(str(exc), use_korean),
-                notice_message=notice_message,
+                raw_error_message=str(exc),
+                conflict_findings=conflict_findings,
             )
 
     def prepare_install_plan(

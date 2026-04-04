@@ -2435,14 +2435,16 @@ class OptiManagerApp:
             logger.info("Running install precheck with handler: %s", getattr(handler, "handler_key", "default"))
             precheck = handler.run_install_precheck(game_data, self.lang == "ko", logger)
             self.install_precheck_ok = bool(precheck.ok)
-            self.install_precheck_error = str(precheck.error_message or "")
+            self.install_precheck_error = ""
             self.install_precheck_dll_name = str(precheck.resolved_dll_name or "")
-            if precheck.notice_message:
-                logger.info("Install precheck notice: %s", precheck.notice_message)
+            notice_message = handler.format_precheck_notice(precheck, False)
+            if notice_message:
+                logger.info("Install precheck notice: %s", notice_message)
             if precheck.ok:
                 logger.info("Install precheck resolved DLL name: %s", self.install_precheck_dll_name)
             else:
-                logger.warning("Install precheck failed: %s", self.install_precheck_error)
+                self.install_precheck_error = handler.format_precheck_error(precheck, self.lang == "ko")
+                logger.warning("Install precheck failed: %s", precheck.raw_error_message)
         except Exception as exc:
             self.install_precheck_ok = False
             self.install_precheck_error = str(exc)

@@ -9,7 +9,7 @@ from ...i18n import lang_from_bool
 from ...install import OPTISCALER_ASI_NAME
 
 from .base_handler import BaseGameHandler, InstallPlan, InstallPrecheckResult
-from .install_precheck import build_mod_conflict_notice, scan_target_mod_conflicts
+from .install_precheck import scan_target_mod_conflicts
 from .rdr2_xml import apply_rdr2_system_xml_settings, resolve_rdr2_system_xml_path
 
 
@@ -100,29 +100,41 @@ class Rdr2Handler(BaseGameHandler):
     ) -> InstallPrecheckResult:
         target_path = str(game_data.get("path", "")).strip()
         conflict_findings = scan_target_mod_conflicts(target_path, logger=logger)
-        notice_message = build_mod_conflict_notice(conflict_findings, use_korean)
         xml_path = resolve_rdr2_system_xml_path()
 
         if not xml_path.is_file():
             return InstallPrecheckResult(
                 ok=False,
-                error_message=_build_rdr2_missing_xml_error(xml_path, use_korean),
-                notice_message=notice_message,
+                raw_error_message=_build_rdr2_missing_xml_error(xml_path, False),
+                conflict_findings=conflict_findings,
+                error_code="missing_system_xml",
+                error_context={"xml_path": str(xml_path)},
             )
 
         blocked_mods = _scan_rdr2_blocked_mods(target_path, logger=logger)
         if blocked_mods:
             return InstallPrecheckResult(
                 ok=False,
-                error_message=_build_rdr2_blocked_mod_error(blocked_mods, use_korean),
-                notice_message=notice_message,
+                raw_error_message=_build_rdr2_blocked_mod_error(blocked_mods, False),
+                conflict_findings=conflict_findings,
+                error_code="blocked_mods",
+                error_context={"detected_mods": blocked_mods},
             )
 
         return InstallPrecheckResult(
             ok=True,
             resolved_dll_name=OPTISCALER_ASI_NAME,
-            notice_message=notice_message,
+            conflict_findings=conflict_findings,
         )
+
+    def format_precheck_error(self, precheck: InstallPrecheckResult, use_korean: bool) -> str:
+        if precheck.error_code == "missing_system_xml":
+            xml_path = Path(str(precheck.error_context.get("xml_path", "")).strip())
+            return _build_rdr2_missing_xml_error(xml_path, use_korean)
+        if precheck.error_code == "blocked_mods":
+            blocked_mods = tuple(str(mod).strip() for mod in precheck.error_context.get("detected_mods", ()) if str(mod).strip())
+            return _build_rdr2_blocked_mod_error(blocked_mods, use_korean)
+        return super().format_precheck_error(precheck, use_korean)
 
     def prepare_install_plan(
         self,
