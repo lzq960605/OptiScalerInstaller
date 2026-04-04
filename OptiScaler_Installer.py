@@ -1,12 +1,10 @@
 ﻿import os
 import shutil
 import tempfile
-import zipfile
 import tkinter as tk
 import time
 import math
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import urlparse
 from tkinter import filedialog, messagebox
 import logging
 import sys
@@ -18,10 +16,18 @@ import ctypes
 import stat
 from installer import app_update
 from installer.app import (
+    ArchivePreparationCallbacks,
+    ArchivePreparationController,
+    ArchivePreparationState,
+    GameDbControllerCallbacks,
+    GameDbLoadController,
+    GameDbLoadResult,
     gpu_notice,
     message_popup,
     render_markup_to_text_widget,
     rtss_notice,
+    StartupFlowController,
+    StartupFlowCallbacks,
     strip_markup_text,
 )
 from installer.app.poster_queue import PosterQueueController
@@ -441,15 +447,10 @@ class OptiManagerApp:
         self.fsr4_archive_downloading = False
         self.fsr4_archive_error = ""
         self.fsr4_archive_filename = ""
-        self._post_sheet_startup_done = False
-        self._startup_popup_queue: list[dict[str, object]] = []
-        self._startup_popup_active = False
-        self._startup_popup_order = 0
         self._initial_auto_scan_empty_popup_shown = False
         self.found_exe_list = []
         self.game_db = {}
         self.module_download_links = {}
-        self._game_db_load_started = False
         self.active_game_db_vendor = "default"
         self.active_game_db_gid = SHEET_GID
         self.gpu_names: list[str] = []
@@ -480,6 +481,8 @@ class OptiManagerApp:
         self._last_reflow_width = 0
         self._base_root_width = None
         self._ctk_images: list = []   # keep refs alive
+        self._archive_controller: Optional[ArchivePreparationController] = None
+        self._game_db_controller: Optional[GameDbLoadController] = None
         self._scan_controller: Optional[ScanController] = None
         self._poster_loader = PosterImageLoader(
             PosterLoaderConfig(
@@ -508,6 +511,18 @@ class OptiManagerApp:
             is_scan_in_progress=self._is_scan_in_progress,
             on_image_ready=self._apply_loaded_poster,
         )
+        self._startup_flow = StartupFlowController(
+            root=self.root,
+            callbacks=StartupFlowCallbacks(
+                start_archive_prepare=self._start_optiscaler_archive_prepare,
+                start_auto_scan=self._start_auto_scan,
+                show_rtss_notice=self._show_rtss_notice,
+                show_startup_warning_popup=self._show_startup_warning_popup,
+            ),
+            is_multi_gpu_blocked=self._is_multi_gpu_block_active,
+            get_startup_warning_text=lambda: pick_module_message(self.module_download_links, "warning", self.lang),
+            logger=logging.getLogger(),
+        )
         self._task_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="general-task")
         self._download_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="archive-download")
         self._app_update_manager = app_update.InstallerUpdateManager(
@@ -515,7 +530,7 @@ class OptiManagerApp:
             current_version=APP_VERSION,
             strings=self.txt,
             on_busy_state_changed=self._update_install_button_state,
-            on_update_failed=lambda: self._run_post_sheet_startup(True),
+            on_update_failed=lambda: self._startup_flow.run_post_sheet_startup(True),
             on_exit_requested=self._on_close,
         )
         self._games_scrollregion_after_id = None
@@ -525,6 +540,8 @@ class OptiManagerApp:
         self._status_indicator_pulse_visible = True
         self._status_indicator_pulse_colors = (_STATUS_INDICATOR_LOADING, _STATUS_INDICATOR_LOADING_DIM)
         self.setup_ui()
+        self._create_archive_controller()
+        self._create_game_db_controller()
         self._create_scan_controller()
         # Fetch GPU info asynchronously to avoid blocking startup on slow PowerShell
         try:
@@ -640,7 +657,7 @@ class OptiManagerApp:
 
         self._gpu_selection_pending = False
         self._selected_gpu_adapter = None
-        self._post_sheet_startup_done = True
+        self._startup_flow.mark_post_sheet_startup_done()
         self.sheet_loading = False
         self.sheet_status = False
         self.game_db = {}
@@ -979,54 +996,29 @@ class OptiManagerApp:
         self.root.destroy()
 
     def _start_game_db_load_async(self):
-        if self._game_db_load_started:
+        if self._game_db_controller is None:
             return
-        self._game_db_load_started = True
 
         game_db_gid = int(getattr(self, "active_game_db_gid", SHEET_GID) or SHEET_GID)
         game_db_vendor = str(getattr(self, "active_game_db_vendor", "default") or "default")
+        started = self._game_db_controller.start_load(game_db_gid, game_db_vendor)
+        if not started:
+            return
         logging.info(
             "[APP] Starting Game DB load for vendor=%s gpu=%s",
             game_db_vendor,
             self.gpu_info,
         )
-        self._task_executor.submit(self._load_game_db_worker, game_db_gid, game_db_vendor)
 
-    def _load_game_db_worker(self, game_db_gid: int, game_db_vendor: str):
-        try:
-            db = sheet_loader.load_game_db_from_public_sheet(SHEET_ID, game_db_gid)
-            if not db:
-                raise ValueError("Sheet has no data.")
-
-            module_links = {}
-            try:
-                module_links = sheet_loader.load_module_download_links_from_public_sheet(SHEET_ID, DOWNLOAD_LINKS_SHEET_GID)
-            except Exception as link_err:
-                logging.warning("Failed to load download-link sheet (gid=%s): %s", DOWNLOAD_LINKS_SHEET_GID, link_err)
-
-            self.root.after(
-                0,
-                lambda db=db, links=module_links, gid=game_db_gid, vendor=game_db_vendor:
-                    self._on_game_db_loaded(db, links, True, None, gid, vendor),
-            )
-        except Exception as e:
-            self.root.after(
-                0,
-                lambda err=e, gid=game_db_gid, vendor=game_db_vendor:
-                    self._on_game_db_loaded({}, {}, False, err, gid, vendor),
-            )
-
-    def _on_game_db_loaded(self, db, module_links, ok, err, game_db_gid=None, game_db_vendor="default"):
+    def _on_game_db_loaded(self, result: GameDbLoadResult) -> None:
         self.sheet_loading = False
-        if game_db_gid is not None:
-            self.active_game_db_gid = int(game_db_gid)
-        if game_db_vendor:
-            self.active_game_db_vendor = str(game_db_vendor)
-        self.game_db = db if ok else {}
-        self.module_download_links = module_links if ok else {}
+        self.active_game_db_gid = int(result.game_db_gid)
+        self.active_game_db_vendor = str(result.game_db_vendor or "default")
+        self.game_db = result.game_db if result.ok else {}
+        self.module_download_links = result.module_download_links if result.ok else {}
 
-        self.sheet_status = ok
-        if ok:
+        self.sheet_status = result.ok
+        if result.ok:
             logging.info(
                 "[APP] Game DB loaded successfully: vendor=%s, games=%d, module_links=%d",
                 self.active_game_db_vendor,
@@ -1037,7 +1029,7 @@ class OptiManagerApp:
             logging.error(
                 "[APP] Failed to load Game DB for vendor=%s: %s",
                 self.active_game_db_vendor,
-                err,
+                result.error,
             )
         if self.multi_gpu_blocked:
             self._update_install_button_state()
@@ -1046,336 +1038,55 @@ class OptiManagerApp:
         self._refresh_optiscaler_archive_info_ui()
         self._update_install_button_state()
         self._update_sheet_status()
-        update_started = self.check_app_update() if ok else False
+        update_started = self.check_app_update() if result.ok else False
         if not update_started:
-            self._run_post_sheet_startup(ok)
-
-    def _get_optiscaler_archive_entry(self) -> dict:
-        entry = self.module_download_links.get("optiscaler", {}) if hasattr(self, "module_download_links") else {}
-        return entry if isinstance(entry, dict) else {}
-
-    def _get_expected_optiscaler_archive_name(self) -> str:
-        entry = self._get_optiscaler_archive_entry()
-        filename = str(entry.get("filename", "") or entry.get("version", "")).strip()
-        if filename:
-            return Path(filename).name
-
-        url = str(entry.get("url", "")).strip()
-        if not url:
-            return ""
-        parsed = urlparse(url)
-        return Path(parsed.path).name
-
-    def _get_fsr4_archive_entry(self) -> dict:
-        entry = self.module_download_links.get("fsr4int8", {}) if hasattr(self, "module_download_links") else {}
-        return entry if isinstance(entry, dict) else {}
-
-    def _get_expected_fsr4_archive_name(self) -> str:
-        entry = self._get_fsr4_archive_entry()
-        filename = str(entry.get("filename", "") or entry.get("version", "")).strip()
-        if filename:
-            return Path(filename).name
-
-        url = str(entry.get("url", "")).strip()
-        if not url:
-            return ""
-        parsed = urlparse(url)
-        return Path(parsed.path).name
-
-    def _list_stale_optiscaler_archive_paths(self, keep_filename: str) -> list[Path]:
-        cache_dir = Path(getattr(self, "optiscaler_cache_dir", OPTISCALER_CACHE_DIR))
-        if not cache_dir.exists():
-            return []
-
-        keep_name = Path(str(keep_filename or "")).name.casefold()
-        archive_suffixes = {".7z", ".zip", ".rar", ".tar", ".gz", ".xz", ".bz2"}
-        stale_paths: list[Path] = []
-        for cache_path in cache_dir.iterdir():
-            if not cache_path.is_file():
-                continue
-            if keep_name and cache_path.name.casefold() == keep_name:
-                continue
-            if cache_path.suffix.lower() not in archive_suffixes:
-                continue
-            stale_paths.append(cache_path)
-        return sorted(stale_paths)
-
-    def _cleanup_stale_optiscaler_archives(self, keep_filename: str):
-        for stale_path in self._list_stale_optiscaler_archive_paths(keep_filename):
-            try:
-                stale_path.unlink()
-                logging.info("[APP] Removed stale OptiScaler archive cache: %s", stale_path)
-            except OSError:
-                logging.warning("[APP] Failed to remove stale OptiScaler archive cache: %s", stale_path, exc_info=True)
+            self._startup_flow.run_post_sheet_startup(result.ok)
 
     def _start_optiscaler_archive_prepare(self):
-        entry = self._get_optiscaler_archive_entry()
-        url = str(entry.get("url", "")).strip()
-        filename = self._get_expected_optiscaler_archive_name()
-        self.optiscaler_archive_filename = filename
-
-        if not url or not filename:
-            self.optiscaler_archive_ready = False
-            self.optiscaler_archive_downloading = False
-            self.optiscaler_archive_error = "Missing archive metadata in sheet."
-            self.opti_source_archive = ""
-            logging.warning(
-                "[APP] OptiScaler archive preparation skipped: missing metadata (url=%r, filename=%r, entry=%r)",
-                url,
-                filename,
-                entry,
-            )
-            self._start_fsr4_archive_prepare()
+        if self._archive_controller is None:
+            return
+        entry = self.module_download_links.get("optiscaler", {}) if hasattr(self, "module_download_links") else {}
+        state = self._archive_controller.prepare_optiscaler(entry, self.optiscaler_cache_dir)
+        self._apply_optiscaler_archive_state(state)
+        if state.downloading:
             self._update_install_button_state()
             return
-
-        cache_path = self.optiscaler_cache_dir / filename
-        self.opti_source_archive = str(cache_path)
-        if cache_path.exists():
-            self.optiscaler_archive_ready = True
-            self.optiscaler_archive_downloading = False
-            self.optiscaler_archive_error = ""
-            logging.info("[APP] OptiScaler archive already cached: %s", cache_path)
-            self._cleanup_stale_optiscaler_archives(filename)
-            self._start_fsr4_archive_prepare()
-            self._update_install_button_state()
-            return
-
-        self.optiscaler_archive_ready = False
-        self.optiscaler_archive_downloading = True
-        self.optiscaler_archive_error = ""
-        logging.info("[APP] Starting OptiScaler archive download: %s -> %s", url, cache_path)
-        self._update_install_button_state()
-        self._download_executor.submit(self._download_optiscaler_archive_worker, url, str(cache_path), filename)
-
-    def _download_optiscaler_archive_worker(self, url: str, dest_path: str, archive_name: str):
-        try:
-            installer_services.download_to_file(url, dest_path, timeout=300)
-            logging.info("[APP] OptiScaler archive download completed: %s", dest_path)
-            self.root.after(
-                0,
-                lambda path=dest_path, name=archive_name: self._on_optiscaler_archive_ready(path, name, None),
-            )
-        except Exception as exc:
-            logging.error("[APP] OptiScaler archive download failed: %s", exc)
-            self.root.after(
-                0,
-                lambda err=str(exc): self._on_optiscaler_archive_ready("", archive_name, err),
-            )
-
-    def _on_optiscaler_archive_ready(self, archive_path: str, archive_name: str, error_message: Optional[str]):
-        self.optiscaler_archive_filename = archive_name
-        self.optiscaler_archive_downloading = False
-        if error_message:
-            self.optiscaler_archive_ready = False
-            self.optiscaler_archive_error = error_message
-            self.opti_source_archive = ""
-            logging.warning("[APP] OptiScaler archive is not ready: %s", error_message)
-        else:
-            self.optiscaler_archive_ready = True
-            self.optiscaler_archive_error = ""
-            self.opti_source_archive = archive_path
-            logging.info("[APP] OptiScaler archive is ready: %s", archive_path)
-            self._cleanup_stale_optiscaler_archives(archive_name)
-
         self._start_fsr4_archive_prepare()
         self._update_install_button_state()
 
     def _start_fsr4_archive_prepare(self):
-        if not self._should_apply_fsr4_for_game():
-            self.fsr4_archive_ready = False
-            self.fsr4_archive_downloading = False
-            self.fsr4_archive_error = ""
-            self.fsr4_archive_filename = ""
-            self.fsr4_source_archive = ""
+        if self._archive_controller is None:
+            return
+        enabled = self._should_apply_fsr4_for_game()
+        if not enabled:
             logging.info("[APP] Skipping FSR4 preparation for GPU: %s", self.gpu_info)
-            self._update_install_button_state()
-            return
-
-        entry = self._get_fsr4_archive_entry()
-        url = str(entry.get("url", "")).strip()
-        filename = self._get_expected_fsr4_archive_name()
-        self.fsr4_archive_filename = filename
-
-        if not url or not filename:
-            self.fsr4_archive_ready = False
-            self.fsr4_archive_downloading = False
-            self.fsr4_archive_error = "Missing FSR4 download metadata in sheet."
-            self.fsr4_source_archive = ""
-            logging.warning(
-                "[APP] FSR4 preparation skipped: missing metadata (filename=%r, entry=%r)",
-                filename,
-                entry,
-            )
-            self._update_install_button_state()
-            return
-
-        cache_path = self.fsr4_cache_dir / filename
-        self.fsr4_source_archive = str(cache_path)
-        if cache_path.exists():
-            if cache_path.suffix.lower() == ".zip" and not zipfile.is_zipfile(cache_path):
-                logging.warning("[APP] Cached FSR4 file is invalid, removing and downloading again: %s", cache_path)
-                try:
-                    cache_path.unlink()
-                except OSError as exc:
-                    self.fsr4_archive_ready = False
-                    self.fsr4_archive_downloading = False
-                    self.fsr4_archive_error = f"Failed to remove invalid FSR4 cache: {exc}"
-                    self.fsr4_source_archive = ""
-                    self._update_install_button_state()
-                    return
-            else:
-                self.fsr4_archive_ready = True
-                self.fsr4_archive_downloading = False
-                self.fsr4_archive_error = ""
-                logging.info("[APP] FSR4 already cached: %s", cache_path)
-                self._update_install_button_state()
-                return
-
-        self.fsr4_archive_ready = False
-        self.fsr4_archive_downloading = True
-        self.fsr4_archive_error = ""
-        logging.info("[APP] Starting FSR4 download: %s", filename)
-        self._update_install_button_state()
-        self._download_executor.submit(self._download_fsr4_archive_worker, url, str(cache_path), filename)
-
-    def _download_fsr4_archive_worker(self, url: str, dest_path: str, archive_name: str):
-        try:
-            installer_services.download_to_file(url, dest_path, timeout=300)
-            if Path(dest_path).suffix.lower() == ".zip" and not zipfile.is_zipfile(dest_path):
-                Path(dest_path).unlink(missing_ok=True)
-                raise RuntimeError(f"Downloaded FSR4 file is not a valid zip file: {dest_path}")
-            logging.info("[APP] FSR4 download completed: %s", dest_path)
-            self.root.after(
-                0,
-                lambda path=dest_path, name=archive_name: self._on_fsr4_archive_ready(path, name, None),
-            )
-        except Exception as exc:
-            logging.error("[APP] FSR4 download failed: %s", exc)
-            self.root.after(
-                0,
-                lambda err=str(exc): self._on_fsr4_archive_ready("", archive_name, err),
-            )
-
-    def _on_fsr4_archive_ready(self, archive_path: str, archive_name: str, error_message: Optional[str]):
-        self.fsr4_archive_filename = archive_name
-        self.fsr4_archive_downloading = False
-        if error_message:
-            self.fsr4_archive_ready = False
-            self.fsr4_archive_error = error_message
-            self.fsr4_source_archive = ""
-            logging.warning("[APP] FSR4 is not ready: %s", error_message)
-        else:
-            self.fsr4_archive_ready = True
-            self.fsr4_archive_error = ""
-            self.fsr4_source_archive = archive_path
-            logging.info("[APP] FSR4 is ready: %s", archive_path)
-
-        self._update_install_button_state()
-
-    def _enqueue_startup_popup(self, popup_id: str, priority: int, show_callback, blocking: bool = False) -> None:
-        self._startup_popup_order += 1
-        self._startup_popup_queue.append(
-            {
-                "id": popup_id,
-                "priority": int(priority),
-                "order": int(self._startup_popup_order),
-                "blocking": bool(blocking),
-                "show": show_callback,
-            }
+        entry = self.module_download_links.get("fsr4int8", {}) if hasattr(self, "module_download_links") else {}
+        state = self._archive_controller.prepare_fsr4(
+            entry,
+            self.fsr4_cache_dir,
+            enabled=enabled,
         )
-
-    def _run_next_startup_popup(self) -> None:
-        if self._startup_popup_active:
-            return
-        if not self._startup_popup_queue:
-            return
-
-        self._startup_popup_queue.sort(key=lambda item: (-int(item["priority"]), int(item["order"])))
-        popup_item = self._startup_popup_queue.pop(0)
-        popup_id = str(popup_item.get("id", "unknown"))
-        show_callback = popup_item.get("show")
-        is_blocking = bool(popup_item.get("blocking", False))
-        if not callable(show_callback):
-            logging.warning("[APP] Startup popup %s has no callable show callback", popup_id)
-            self.root.after_idle(self._run_next_startup_popup)
-            return
-
-        self._startup_popup_active = True
-        finished = False
-
-        def _finish_popup() -> None:
-            nonlocal finished
-            if finished:
-                return
-            finished = True
-            self._startup_popup_active = False
-            self.root.after_idle(self._run_next_startup_popup)
-
-        try:
-            if is_blocking:
-                show_callback()
-                _finish_popup()
-            else:
-                show_callback(_finish_popup)
-        except Exception:
-            logging.exception("[APP] Failed to show startup popup: %s", popup_id)
-            _finish_popup()
-
-    def _run_post_sheet_startup(self, ok: bool):
-        if self._post_sheet_startup_done:
-            return
-
-        if self.multi_gpu_blocked:
-            self._post_sheet_startup_done = True
-            return
-
-        self._post_sheet_startup_done = True
-        self._startup_popup_queue.clear()
-        self._startup_popup_active = False
-
-        logger = None
-        if getattr(self, "found_exe_list", None) and self.selected_game_index is not None:
-            logger = get_prefixed_logger(self.found_exe_list[self.selected_game_index].get("game_name", "unknown"))
-
-        self._enqueue_startup_popup(
-            "rtss_notice",
-            priority=100,
-            blocking=True,
-            show_callback=lambda: rtss_notice.check_and_show_rtss_notice(
-                root=self.root,
-                module_download_links=self.module_download_links,
-                use_korean=USE_KOREAN,
-                assets_dir=ASSETS_DIR,
-                theme=RTSS_NOTICE_THEME,
-                logger=logger,
-            ),
-        )
-
-        if not ok:
-            self._run_next_startup_popup()
-            return
-
-        self._start_optiscaler_archive_prepare()
-        self._start_auto_scan()
-
-        warning_text = pick_module_message(self.module_download_links, "warning", self.lang)
-        if warning_text:
-            self._enqueue_startup_popup(
-                "startup_warning",
-                priority=80,
-                blocking=False,
-                show_callback=lambda done_callback, warning=warning_text: self._show_startup_warning_popup(
-                    warning,
-                    on_close=done_callback,
-                ),
-            )
-        self._run_next_startup_popup()
+        self._apply_fsr4_archive_state(state)
+        self._update_install_button_state()
 
     def check_app_update(self) -> bool:
         return self._app_update_manager.check_for_update(
             self.module_download_links,
             blocked=self.multi_gpu_blocked,
+        )
+
+    def _show_rtss_notice(self) -> None:
+        logger = None
+        if getattr(self, "found_exe_list", None) and self.selected_game_index is not None:
+            logger = get_prefixed_logger(self.found_exe_list[self.selected_game_index].get("game_name", "unknown"))
+
+        rtss_notice.check_and_show_rtss_notice(
+            root=self.root,
+            module_download_links=self.module_download_links,
+            use_korean=USE_KOREAN,
+            assets_dir=ASSETS_DIR,
+            theme=RTSS_NOTICE_THEME,
+            logger=logger,
         )
 
     def _show_startup_warning_popup(
@@ -1402,6 +1113,55 @@ class OptiManagerApp:
     def _is_scan_in_progress(self) -> bool:
         controller = getattr(self, "_scan_controller", None)
         return bool(controller and controller.is_scan_in_progress)
+
+    def _create_archive_controller(self) -> None:
+        self._archive_controller = ArchivePreparationController(
+            executor=self._download_executor,
+            schedule=lambda callback: self.root.after(0, callback),
+            callbacks=ArchivePreparationCallbacks(
+                on_optiscaler_state_changed=self._on_optiscaler_archive_state_changed,
+                on_fsr4_state_changed=self._on_fsr4_archive_state_changed,
+            ),
+            download_to_file=installer_services.download_to_file,
+            logger=logging.getLogger(),
+        )
+
+    def _create_game_db_controller(self) -> None:
+        self._game_db_controller = GameDbLoadController(
+            executor=self._task_executor,
+            schedule=lambda callback: self.root.after(0, callback),
+            callbacks=GameDbControllerCallbacks(
+                on_load_complete=self._on_game_db_loaded,
+            ),
+            spreadsheet_id=SHEET_ID,
+            download_links_gid=DOWNLOAD_LINKS_SHEET_GID,
+            load_game_db=sheet_loader.load_game_db_from_public_sheet,
+            load_module_download_links=sheet_loader.load_module_download_links_from_public_sheet,
+            logger=logging.getLogger(),
+        )
+
+    def _apply_optiscaler_archive_state(self, state: ArchivePreparationState) -> None:
+        self.optiscaler_archive_filename = str(state.filename or "")
+        self.optiscaler_archive_ready = bool(state.ready)
+        self.optiscaler_archive_downloading = bool(state.downloading)
+        self.optiscaler_archive_error = str(state.error_message or "")
+        self.opti_source_archive = str(state.archive_path or "")
+
+    def _apply_fsr4_archive_state(self, state: ArchivePreparationState) -> None:
+        self.fsr4_archive_filename = str(state.filename or "")
+        self.fsr4_archive_ready = bool(state.ready)
+        self.fsr4_archive_downloading = bool(state.downloading)
+        self.fsr4_archive_error = str(state.error_message or "")
+        self.fsr4_source_archive = str(state.archive_path or "")
+
+    def _on_optiscaler_archive_state_changed(self, state: ArchivePreparationState) -> None:
+        self._apply_optiscaler_archive_state(state)
+        self._start_fsr4_archive_prepare()
+        self._update_install_button_state()
+
+    def _on_fsr4_archive_state_changed(self, state: ArchivePreparationState) -> None:
+        self._apply_fsr4_archive_state(state)
+        self._update_install_button_state()
 
     def _create_scan_controller(self) -> None:
         self._scan_controller = ScanController(
@@ -1467,7 +1227,7 @@ class OptiManagerApp:
             return
         self._initial_auto_scan_empty_popup_shown = True
         detail = self.txt.main.auto_scan_no_results
-        self._enqueue_startup_popup(
+        self._startup_flow.enqueue_popup(
             "auto_scan_no_results",
             priority=60,
             blocking=False,
@@ -1476,7 +1236,7 @@ class OptiManagerApp:
                 on_close=done_callback,
             ),
         )
-        self._run_next_startup_popup()
+        self._startup_flow.run_next_popup()
 
     def _start_auto_scan(self):
         """Kick off a silent auto-scan of known Steam/game directories."""
