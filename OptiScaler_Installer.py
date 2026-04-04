@@ -1486,11 +1486,6 @@ class OptiManagerApp:
             return
         self._scan_controller.start_auto_scan()
 
-    def _begin_scan(self, scan_paths: list[str], *, is_auto: bool) -> None:
-        if self._scan_controller is None:
-            return
-        self._scan_controller.start_scan(scan_paths, is_auto=is_auto)
-
     # ------------------------------------------------------------------
     # UI builder
     # ------------------------------------------------------------------
@@ -2507,7 +2502,9 @@ class OptiManagerApp:
         if not self.game_folder:
             return
 
-        self._begin_scan([self.game_folder], is_auto=False)
+        if self._scan_controller is None:
+            return
+        self._scan_controller.start_manual_scan(self.game_folder)
 
     def _add_game_card_incremental(self, game: dict):
         """Append one game to the list and immediately render + queue its cover download."""

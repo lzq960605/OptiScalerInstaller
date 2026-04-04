@@ -18,6 +18,13 @@ GameRecord = dict[str, Any]
 GameSupportPredicate = Callable[[GameDbEntry], bool]
 
 
+def _log_debug(logger, message: str, *args: Any) -> None:
+    if logger:
+        logger.debug(message, *args)
+    else:
+        logging.debug(message, *args)
+
+
 def _append_existing_unique_path(paths: list[str], seen: set[str], candidate: Path) -> None:
     if not candidate.exists() or not candidate.is_dir():
         return
@@ -126,34 +133,27 @@ def _resolve_matched_file(file_lookup: dict[str, str], required_files: list[str]
 def _build_game_record(root_dir: str, matched_file: str, entry: GameDbEntry, *, lang: Lang) -> GameRecord:
     korean_display = entry.get("game_name_kr", "") if lang == "ko" else ""
     korean_information = entry.get("information_kr", "") if lang == "ko" else ""
-    return {
-        "path": root_dir,
-        "exe": matched_file,
-        "display": korean_display or entry["display"],
-        "game_name": entry.get("game_name", entry.get("display", "")),
-        "dll_name": entry["dll_name"],
-        "ultimate_asi_loader": entry.get("ultimate_asi_loader", False),
-        "ini_settings": entry.get("ini_settings", {}),
-        "ingame_ini": entry.get("ingame_ini", ""),
-        "ingame_settings": entry.get("ingame_settings", {}),
-        "engine_ini_location": entry.get("engine_ini_location", ""),
-        "engine_ini_type": entry.get("engine_ini_type", ""),
-        "module_dl": entry.get("module_dl", ""),
-        "optipatcher": entry.get("optipatcher", False),
-        "unreal5_url": entry.get("unreal5_url", ""),
-        "unreal5_rule": entry.get("unreal5_rule", ""),
-        "reframework_url": entry.get("reframework_url", ""),
-        "information": korean_information or entry.get("information", ""),
-        "cover_url": entry.get("cover_url", ""),
-        "filename_cover": entry.get("filename_cover", ""),
-        "supported_gpu": entry.get("supported_gpu", ""),
-        "sheet_order": int(entry.get("sheet_order", 10**9)),
-        "popup_kr": entry.get("popup_kr", ""),
-        "popup_en": entry.get("popup_en", ""),
-        "after_popup_kr": entry.get("after_popup_kr", ""),
-        "after_popup_en": entry.get("after_popup_en", ""),
-        "guidepage_after_installation": entry.get("guidepage_after_installation", ""),
-    }
+    game_record = dict(entry)
+
+    match_files = entry.get("match_files")
+    if isinstance(match_files, (list, tuple)):
+        game_record["match_files"] = list(match_files)
+
+    ini_settings = entry.get("ini_settings")
+    if isinstance(ini_settings, dict):
+        game_record["ini_settings"] = dict(ini_settings)
+
+    ingame_settings = entry.get("ingame_settings")
+    if isinstance(ingame_settings, dict):
+        game_record["ingame_settings"] = dict(ingame_settings)
+
+    game_record["path"] = root_dir
+    game_record["exe"] = matched_file
+    game_record["display"] = korean_display or entry.get("display", "")
+    game_record["game_name"] = entry.get("game_name", entry.get("display", ""))
+    game_record["information"] = korean_information or entry.get("information", "")
+
+    return game_record
 
 
 def iter_scan_game_folders(
@@ -170,13 +170,17 @@ def iter_scan_game_folders(
     match_index = _build_match_index(game_db)
 
     for game_folder in game_folders:
+        normalized_folder = str(game_folder or "").strip()
+        if not normalized_folder:
+            continue
+
+        def _walk_error(exc: OSError, source_path: str = normalized_folder) -> None:
+            _log_debug(logger, "Cannot walk %s: %s", source_path, exc)
+
         try:
-            folder_iter = os.walk(game_folder)
+            folder_iter = os.walk(normalized_folder, onerror=_walk_error)
         except Exception as exc:
-            if logger:
-                logger.debug("Cannot walk %s: %s", game_folder, exc)
-            else:
-                logging.debug("Cannot walk %s: %s", game_folder, exc)
+            _log_debug(logger, "Cannot walk %s: %s", normalized_folder, exc)
             continue
 
         for root_dir, _, files in folder_iter:
