@@ -108,7 +108,7 @@ def _iter_env_file_candidates() -> tuple[Path, ...]:
 
 
  # Application Version
-APP_VERSION = "0.3.1"
+APP_VERSION = "0.3.2"
 # Install flow supports up to two detected GPUs. Dual-GPU requires explicit user selection.
 MAX_SUPPORTED_GPU_COUNT = 2
 
