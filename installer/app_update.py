@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import logging
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -12,7 +13,7 @@ from urllib.parse import urlparse
 import webbrowser
 import zipfile
 
-from .common import subprocess_no_window_kwargs
+from .common.update_launch import build_updated_installer_launch_command
 from .i18n import AppStrings
 from .install import services as installer_services
 
@@ -279,11 +280,18 @@ class InstallerUpdateManager:
             raise FileNotFoundError(f"Updated installer not found: {target}")
 
         logging.info("[APP] Launching updated installer v%s from %s", latest_version, target)
-        subprocess.Popen(
-            [str(target)],
+        command = build_updated_installer_launch_command(target)
+        process = subprocess.Popen(
+            command,
             cwd=str(target.parent),
-            **subprocess_no_window_kwargs(),
         )
+        if os.name == "nt":
+            try:
+                import ctypes
+
+                ctypes.windll.user32.AllowSetForegroundWindow(int(process.pid))
+            except Exception:
+                logging.debug("[APP] Failed to grant foreground permission to updated installer", exc_info=True)
 
     def _on_update_ready(self, launch_path: str, latest_version: str, error_message: Optional[str]) -> None:
         self._set_in_progress(False)

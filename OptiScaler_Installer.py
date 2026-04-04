@@ -33,6 +33,7 @@ from installer.app import (
     StartupFlowController,
     StartupFlowCallbacks,
 )
+from installer.app.window_focus import has_startup_foreground_request, request_window_foreground
 from installer.app.poster_queue import PosterQueueController
 from installer.app.scan_controller import ScanController, ScanControllerCallbacks
 from installer.app.ui_builder import MainUiTheme, build_main_ui
@@ -2241,6 +2242,9 @@ if __name__ == "__main__":
             logging.exception("engine.ini edit run failed")
         sys.exit(0)
 
+    request_foreground = has_startup_foreground_request(sys.argv[1:])
     root = ctk.CTk()
     app = OptiManagerApp(root)
+    if request_foreground:
+        request_window_foreground(root, logger=logging.getLogger("APP"))
     root.mainloop()
