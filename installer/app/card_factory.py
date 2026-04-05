@@ -113,7 +113,6 @@ def create_game_card(
             "ctk_img_cache": {},
             "ctk_img_cache_revision": -1,
             "current_image_state": None,
-            "is_default_poster": True,
         },
     )
 
