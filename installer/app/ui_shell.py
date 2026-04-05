@@ -28,13 +28,13 @@ class AppUiShell:
         get_header_presenter: Callable[[], HeaderStatusPresenter | None],
         get_bottom_presenter: Callable[[], BottomPanelPresenter | None],
         callbacks: AppUiShellCallbacks,
-        get_lbl_scan_status: Callable[[], Any] | None = None,
-        get_status_badge_label: Callable[[], Any] | None = None,
-        get_status_badge_dot: Callable[[], Any] | None = None,
-        get_lbl_selected_game_header: Callable[[], Any] | None = None,
-        get_lbl_optiscaler_version_line: Callable[[], Any] | None = None,
-        get_info_text: Callable[[], Any] | None = None,
-        get_lbl_supported_games_wiki_link: Callable[[], Any] | None = None,
+        get_lbl_scan_status: Callable[[], Any],
+        get_status_badge_label: Callable[[], Any],
+        get_status_badge_dot: Callable[[], Any],
+        get_lbl_selected_game_header: Callable[[], Any],
+        get_lbl_optiscaler_version_line: Callable[[], Any],
+        get_info_text: Callable[[], Any],
+        get_lbl_supported_games_wiki_link: Callable[[], Any],
         scan_status_text_color: str,
         status_indicator_offline_color: str,
         status_indicator_warning_color: str,
@@ -47,18 +47,18 @@ class AppUiShell:
         self._get_header_presenter = get_header_presenter
         self._get_bottom_presenter = get_bottom_presenter
         self._callbacks = callbacks
-        self._get_lbl_scan_status = get_lbl_scan_status or (lambda: None)
-        self._get_status_badge_label = get_status_badge_label or (lambda: None)
-        self._get_status_badge_dot = get_status_badge_dot or (lambda: None)
-        self._get_lbl_selected_game_header = get_lbl_selected_game_header or (lambda: None)
-        self._get_lbl_optiscaler_version_line = get_lbl_optiscaler_version_line or (lambda: None)
-        self._get_info_text = get_info_text or (lambda: None)
-        self._get_lbl_supported_games_wiki_link = get_lbl_supported_games_wiki_link or (lambda: None)
-        self._scan_status_text_color = str(scan_status_text_color or "")
-        self._status_indicator_offline_color = str(status_indicator_offline_color or "")
-        self._status_indicator_warning_color = str(status_indicator_warning_color or "")
-        self._status_indicator_loading_color = str(status_indicator_loading_color or "")
-        self._status_indicator_online_color = str(status_indicator_online_color or "")
+        self._get_lbl_scan_status = get_lbl_scan_status
+        self._get_status_badge_label = get_status_badge_label
+        self._get_status_badge_dot = get_status_badge_dot
+        self._get_lbl_selected_game_header = get_lbl_selected_game_header
+        self._get_lbl_optiscaler_version_line = get_lbl_optiscaler_version_line
+        self._get_info_text = get_info_text
+        self._get_lbl_supported_games_wiki_link = get_lbl_supported_games_wiki_link
+        self._scan_status_text_color = scan_status_text_color
+        self._status_indicator_offline_color = status_indicator_offline_color
+        self._status_indicator_warning_color = status_indicator_warning_color
+        self._status_indicator_loading_color = status_indicator_loading_color
+        self._status_indicator_online_color = status_indicator_online_color
         self._logger = logger or logging.getLogger()
 
     def show_game_selection_popup(

@@ -29,7 +29,6 @@ class CardViewportCallbacks:
     has_found_games: Callable[[], bool]
     render_cards: Callable[[bool], None]
     get_effective_widget_scale: Callable[[], float]
-    publish_runtime_state: Callable[[], None]
 
 
 class CardViewportController:
@@ -61,7 +60,6 @@ class CardViewportController:
     def capture_startup_width(self) -> None:
         self._runtime.base_root_width = max(1, int(self._root.winfo_width() or 0))
         self._runtime.last_reflow_width = max(1, int(self._root.winfo_width() or 0))
-        self._publish_runtime_state()
         self._schedule_overflow_fit_check()
         if self._callbacks.has_found_games():
             self._callbacks.render_cards(True)
@@ -237,7 +235,6 @@ class CardViewportController:
         if self._runtime.games_scrollregion_after_id is not None:
             return
         self._runtime.games_scrollregion_after_id = self._root.after_idle(self._refresh_games_scrollregion)
-        self._publish_runtime_state()
 
     def _refresh_games_scrollregion(self) -> None:
         self._runtime.games_scrollregion_after_id = None
@@ -249,7 +246,6 @@ class CardViewportController:
                     canvas.configure(scrollregion=bbox)
         except Exception:
             pass
-        self._publish_runtime_state()
 
     def _schedule_overflow_fit_check(self) -> None:
         if self._runtime.overflow_fit_after_id is not None:
@@ -260,14 +256,12 @@ class CardViewportController:
         except tk.TclError:
             return
         self._runtime.overflow_fit_after_id = self._root.after_idle(self._run_overflow_fit_check)
-        self._publish_runtime_state()
 
     def _run_overflow_fit_check(self) -> None:
         self._runtime.overflow_fit_after_id = None
         try:
             card_frames = tuple(self._callbacks.get_card_frames() or ())
             if not self._root.winfo_exists() or not self._games_scroll.winfo_exists() or not card_frames:
-                self._publish_runtime_state()
                 return
 
             canvas = getattr(self._games_scroll, "_parent_canvas", None)
@@ -284,7 +278,6 @@ class CardViewportController:
                     decision.retry_delay_ms,
                     self._run_overflow_fit_check,
                 )
-                self._publish_runtime_state()
                 return
 
             if decision.relayout_cols is not None:
@@ -294,7 +287,6 @@ class CardViewportController:
                     self._schedule_overflow_fit_check()
         except tk.TclError:
             self._logger.debug("Skipped overflow fit check because widgets are no longer available")
-        self._publish_runtime_state()
 
     def _schedule_reflow_for_resize(self) -> None:
         current_w = max(1, int(self._root.winfo_width() or 0))
@@ -313,7 +305,6 @@ class CardViewportController:
                 self._runtime.resize_in_progress = False
             if decision.should_schedule_overflow_check:
                 self._schedule_overflow_fit_check()
-            self._publish_runtime_state()
             return
 
         if self._runtime.resize_after_id is not None:
@@ -326,18 +317,15 @@ class CardViewportController:
             decision.visual_delay_ms,
             self._end_resize_visual_suppression,
         )
-        self._publish_runtime_state()
 
     def _finish_resize_reflow(self) -> None:
         self._runtime.resize_after_id = None
-        self._publish_runtime_state()
         self._rerender_cards_for_resize()
 
     def _end_resize_visual_suppression(self) -> None:
         self._runtime.resize_visual_after_id = None
         self._runtime.resize_in_progress = False
         self._poster_queue.pump()
-        self._publish_runtime_state()
 
     def _schedule_games_viewport_update(self, delay_ms: int = 30) -> None:
         try:
@@ -349,21 +337,15 @@ class CardViewportController:
             )
         except Exception:
             self._runtime.games_viewport_after_id = None
-        self._publish_runtime_state()
 
     def _run_games_viewport_update(self) -> None:
         self._runtime.games_viewport_after_id = None
         self._poster_queue.pump()
-        self._publish_runtime_state()
 
     def _rerender_cards_for_resize(self) -> None:
         self._runtime.resize_after_id = None
         cols = self._get_dynamic_column_count()
         self.fit_cards_to_visible_width(cols)
-        self._publish_runtime_state()
-
-    def _publish_runtime_state(self) -> None:
-        self._callbacks.publish_runtime_state()
 
 
 __all__ = [

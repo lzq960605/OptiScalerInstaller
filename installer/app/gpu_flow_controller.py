@@ -7,6 +7,7 @@ import logging
 from typing import Any
 
 from ..system import gpu_service
+from ..common import schedule_safely
 
 
 SchedulerCallback = Callable[[Callable[[], None]], Any]
@@ -103,10 +104,7 @@ class GpuFlowController:
         )
 
     def _schedule_callback(self, callback: Callable[[], None], *, description: str) -> None:
-        try:
-            self._schedule(callback)
-        except Exception:
-            self._logger.exception("Failed to schedule %s", description)
+        schedule_safely(self._schedule, callback, self._logger, description=description)
 
     def _normalize_gpu_info_text(self, value: object) -> str:
         text = str(value or "").strip()

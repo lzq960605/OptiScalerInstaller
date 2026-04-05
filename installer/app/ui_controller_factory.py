@@ -98,7 +98,6 @@ def create_card_viewport_bundle(
             has_found_games=lambda: bool(app.found_exe_list),
             render_cards=lambda keep_selection: app._render_cards(keep_selection=keep_selection),
             get_effective_widget_scale=app._get_effective_widget_scale,
-            publish_runtime_state=lambda: None,
         ),
         card_width=config.card_width,
         card_h_spacing=config.card_h_spacing,

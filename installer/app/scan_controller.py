@@ -8,6 +8,7 @@ from typing import Any
 
 from ..games import scanner as game_scanner
 from ..i18n import Lang
+from ..common import schedule_safely
 
 
 GameDbProvider = Callable[[], dict[str, dict[str, Any]]]
@@ -137,10 +138,7 @@ class ScanController:
             )
 
     def _schedule_callback(self, callback: Callable[[], None], *, description: str) -> None:
-        try:
-            self._schedule(callback)
-        except Exception:
-            self._logger.exception("Failed to schedule %s", description)
+        schedule_safely(self._schedule, callback, self._logger, description=description)
 
     def _on_game_found(self, generation: int, game: dict[str, Any]) -> None:
         if generation != self._scan_generation:

@@ -143,14 +143,13 @@ class StartupRuntimeCoordinator:
                 result.error,
             )
 
+        self._callbacks.update_install_button_state()
+        self._callbacks.update_sheet_status()
+
         if gpu_state.multi_gpu_blocked:
-            self._callbacks.update_install_button_state()
-            self._callbacks.update_sheet_status()
             return
 
         self._callbacks.refresh_archive_info_ui()
-        self._callbacks.update_install_button_state()
-        self._callbacks.update_sheet_status()
         update_started = self._callbacks.check_app_update() if result.ok else False
         if not update_started:
             self._callbacks.run_post_sheet_startup(result.ok)
@@ -188,21 +187,21 @@ class StartupRuntimeCoordinator:
         self.apply_fsr4_archive_state(state)
         self._callbacks.update_install_button_state()
 
-    def apply_optiscaler_archive_state(self, state: ArchivePreparationState) -> None:
+    def _apply_archive_state(
+        self, state: ArchivePreparationState, prefix: str, source_archive_field: str
+    ) -> None:
         archive_state = self._archive_state
-        archive_state.optiscaler_filename = str(state.filename or "")
-        archive_state.optiscaler_ready = bool(state.ready)
-        archive_state.optiscaler_downloading = bool(state.downloading)
-        archive_state.optiscaler_error = str(state.error_message or "")
-        archive_state.opti_source_archive = str(state.archive_path or "")
+        setattr(archive_state, f"{prefix}_filename", str(state.filename or ""))
+        setattr(archive_state, f"{prefix}_ready", bool(state.ready))
+        setattr(archive_state, f"{prefix}_downloading", bool(state.downloading))
+        setattr(archive_state, f"{prefix}_error", str(state.error_message or ""))
+        setattr(archive_state, source_archive_field, str(state.archive_path or ""))
+
+    def apply_optiscaler_archive_state(self, state: ArchivePreparationState) -> None:
+        self._apply_archive_state(state, "optiscaler", "opti_source_archive")
 
     def apply_fsr4_archive_state(self, state: ArchivePreparationState) -> None:
-        archive_state = self._archive_state
-        archive_state.fsr4_filename = str(state.filename or "")
-        archive_state.fsr4_ready = bool(state.ready)
-        archive_state.fsr4_downloading = bool(state.downloading)
-        archive_state.fsr4_error = str(state.error_message or "")
-        archive_state.fsr4_source_archive = str(state.archive_path or "")
+        self._apply_archive_state(state, "fsr4", "fsr4_source_archive")
 
     def on_optiscaler_archive_state_changed(self, state: ArchivePreparationState) -> None:
         self.apply_optiscaler_archive_state(state)
