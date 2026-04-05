@@ -3,14 +3,12 @@
 <img width="1920" height="1128" alt="스크린샷 2026-04-03 213812" src="https://github.com/user-attachments/assets/5ace04fd-3cd4-4234-a792-63575fee5610" />
 
 <p align="center">
-  <b>Simple and automated installer for OptiScaler.</b><br>
-  <b>Install and Play game! No need to set up OptiScaler option (Like Plug and Play)</b><br>
+  <b>Simple, automated installer for OptiScaler.</b><br>
+  <b>Install and play — No manual OptiScaler setup required.</b><br>
 </p>
 
 > [!NOTE]
 > This installer is not officially provided by OptiScaler.
-
-</p>
 
 > [!IMPORTANT]
 > **This installer is designed for users who are not familiar with manual OptiScaler installation and configuration.**  
@@ -23,8 +21,8 @@
 ## 📋 Requirements
 ---
 * **Internet Connection:** Required to load the latest game DB from Google Sheets.
-* **Windows 11** Required.
-* **OptiScaler Version:** The latest OptiScaler will be downloaded automatically.
+* **Windows 11:** Required
+* **OptiScaler:** The latest version is downloaded automatically
 
 &nbsp;
 
@@ -41,26 +39,26 @@
 | **NVIDIA** | RTX 20/30 Series | DLSS | XeFG (2x only) |
 
 **Notes**
-- **AMD RX 9000, NVIDIA RTX 40/50 Series:** devices are supported only in games that do **not** support in-game native Frame Generation.  
+- **AMD RX 9000 and NVIDIA RTX 40/50 Series** are supported only in games that do not provide native in-game Frame Generation.
   **Examples:** *Kingdom Come: Deliverance II*, *Death Stranding Director’s Cut*
 - **XeMFG is Intel XeFG Multi Frame Generation Feature** only available for Intel Arc for now.
 
 **Frame Generation Notes**
-- NVIDIA RTX 20/30 Series GPUs do not support native DLSS Frame Generation. This installer enables frame generation by using OptiScaler & Intel XeFG instead.
-- AMD GPUs use OptiScaler & Intel XeFG for frame generation instead of FSR3 Frame Generation after installation.
+- NVIDIA RTX 20/30 Series GPUs do not support native DLSS Frame Generation. This installer enables frame generation through OptiScaler using Intel XeFG instead.
+- On AMD GPUs, this installer uses Intel XeFG through OptiScaler instead of FSR3 Frame Generation.
 
 &nbsp;
 ## ✨ Key Features
 ---
-<p>✅ <b>Live Game DB Update:</b> Supported game list and pre-configured INI & options are loaded live from online DB.</p>
+<p>✅ <b>Live Game DB Update:</b> Supported game list and pre-configured INI & options are loaded dynamically from an online database.</p>
 
 <p>🔍 <b>Auto Game Scan:</b> Automatically detects Steam library folders.</p>
 
-<p>🛠️ <b>One-Click Install:</b> Installs OptiScaler files and <b>pre-configured & tested game specific <code>OptiScaler.ini</code> settings</b> automatically.</p>
+<p>🛠️ <b>One-Click Install:</b> Installs OptiScaler files and <b>pre-configured and tested game specific <code>OptiScaler.ini</code> settings</b> automatically.</p>
 
-<p>🚀 <b>Advanced Patches:</b> Automatic installation of additional modules (OptiPatcher, Unreal5 G/I bug fix) for selected games.</p>
+<p>🚀 <b>Automatic Patches:</b> Automatic installation of additional modules (OptiPatcher, Unreal5 G/I bug fix) for selected games.</p>
 
-<p>🚀 <b>Advanced INI Edit:</b> Automatically edit Unreal Engine.ini & game INI for proper OptiScaler working for selected games.</p>
+<p>🚀 <b>Automatic INI Configuration:</b> Automatically edit Unreal Engine.ini & game INI for proper OptiScaler operation for selected games.</p>
 
 <p>🔔 <b>Smart Guidance:</b> User notifications and RTSS option change guides to ensure the best performance.</p>
 
@@ -69,8 +67,8 @@
 ## 🎮 How to Install
 ---
 1.  **Launch the App:** It will scan your Steam libraries. (Manual folder selection is also available).
-2.  **Check Notice:** View the supported game list and latest update info.
-3.  **Select Game:** Choose the game you want to install optimized OptiScaler files and settings.
+2.  **Review Notices:** Check the supported game list and latest update information.
+3.  **Select Game:** Choose the game for which you want to install optimized OptiScaler files and settings.
 4.  **Install:** Click the **Install** button.
 5.  **Run Game:** Follow the in-game instructions to enable upscaling/frame generation.
     > Press `Insert` to verify with the OptiScaler overlay.
