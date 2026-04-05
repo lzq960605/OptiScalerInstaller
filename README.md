@@ -27,14 +27,15 @@
 > The upscaling and frame generation options shown below refer to **OptiScaler configuration**, not the game's native in-game graphics settings.
 
 | Vendor | Supported GPUs | Upscaling | Frame Generation |
-|---|---|---|---|
-| **Intel** | Arc Series | XeSS | **XeMFG** (default: 3x) |
-| **AMD** | 780/890M, 8060S, RX 60/70 Series | FSR4 INT8 | XeFG (2x) |
-| **NVIDIA** | RTX 20/30 Series | DLSS | XeFG (2x) |
+|:---:|:---:|:---:|:---:|
+| **Intel** | Arc Series | XeSS | **XeMFG** (3x by default, up to 4x) |
+| **AMD** | 780/890M, 8060S, RX 60/70 Series | FSR4 INT8 | XeFG (2x only) |
+| **NVIDIA** | RTX 20/30 Series | DLSS | XeFG (2x only) |
 
 **Notes**
 - **AMD RX 9000, NVIDIA RTX 40/50 Series:** devices are supported only in games that do **not** support in-game FSR Frame Generation.  
   **Examples:** *Kingdom Come: Deliverance II*, *Death Stranding Director’s Cut*
+- **XeMFG is Intel XeFG Multi Frame Generation Feature** only available for Intel Arc for now.
 
 &nbsp;
 
