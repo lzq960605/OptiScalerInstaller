@@ -49,11 +49,6 @@ def render_game_card_visual(
     image_refs: list[Any],
 ) -> None:
     title_overlay = item["hover_title"]
-    item["card"].configure(
-        border_color=theme.card_background,
-        fg_color=theme.card_background,
-        border_width=2,
-    )
 
     if selected or hovered:
         title_overlay.place(x=0, y=int(theme.title_overlay_y))
