@@ -4,7 +4,7 @@ import tempfile
 import tkinter as tk
 import time
 from concurrent.futures import ThreadPoolExecutor
-from tkinter import filedialog, messagebox
+from tkinter import messagebox
 import logging
 import sys
 from pathlib import Path
@@ -13,29 +13,30 @@ from typing import Callable, Optional
 import ctypes
 from installer import app_update
 from installer.app import (
-    AppActionCallbacks,
     AppActionsController,
+    AppControllerFactoryConfig,
+    AppControllers,
     AppNoticeController,
-    AppShutdownCallbacks,
+    ArchiveRuntimeState,
     AppShutdownController,
-    AppShutdownStep,
-    ArchivePreparationCallbacks,
     ArchivePreparationController,
     ArchivePreparationState,
     BottomPanelPresenter,
-    CardRenderCallbacks,
+    build_runtime_state_bundle,
+    CardUiRuntimeState,
     CardRenderController,
-    GameDbControllerCallbacks,
     GameDbLoadController,
     GameDbLoadResult,
-    GpuFlowCallbacks,
+    get_runtime_state_attr,
     GpuFlowController,
     GpuFlowState,
+    GpuRuntimeState,
     HeaderStatusPresenter,
     InstallButtonStateInputs,
     InstallEntryDecision,
     InstallEntryState,
-    InstallSelectionCallbacks,
+    InstallFlowController,
+    InstallRuntimeState,
     InstallSelectionController,
     InstallSelectionPrecheckOutcome,
     InstallSelectionUiState,
@@ -43,7 +44,6 @@ from installer.app import (
     GameCardVisualTheme,
     build_card_grid_placements,
     build_install_button_state_inputs,
-    build_install_entry_state,
     build_selected_game_snapshot,
     clamp_grid_columns,
     compute_card_overflow_fit_decision,
@@ -51,29 +51,32 @@ from installer.app import (
     compute_install_button_state,
     compute_visible_game_indices,
     create_game_card,
+    create_install_flow_controller,
+    bind_app_controllers,
+    build_app_controllers,
     ensure_game_card_image_cache,
     gpu_notice,
     message_popup,
     render_game_card_visual,
     rtss_notice,
-    ScanFeedbackCallbacks,
     ScanFeedbackController,
-    ScanEntryCallbacks,
     ScanEntryController,
     ScanEntryState,
+    set_runtime_state_attr,
+    SheetRuntimeState,
     update_game_card_base_image,
     StartupFlowController,
     StartupFlowCallbacks,
-    validate_install_entry,
+    CardViewportCallbacks,
+    CardViewportController,
+    CardViewportRuntime,
 )
 from installer.app.window_focus import has_startup_foreground_request, request_window_foreground
 from installer.app.poster_queue import PosterQueueController
-from installer.app.scan_controller import ScanController, ScanControllerCallbacks
+from installer.app.scan_controller import ScanController
 from installer.app.ui_builder import MainUiTheme, build_main_ui
 from installer.common.poster_loader import PosterImageLoader, PosterLoaderConfig
 from installer.config import ini_utils
-from installer.data import sheet_loader
-from installer.games.handlers import get_game_handler
 from installer.i18n import (
     detect_ui_language,
     get_app_strings,
@@ -82,9 +85,6 @@ from installer.i18n import (
     pick_sheet_text,
 )
 from installer.install import (
-    build_install_context,
-    create_install_workflow_callbacks,
-    run_install_workflow,
     services as installer_services,
 )
 from installer.system import gpu_service
@@ -468,8 +468,34 @@ MAIN_UI_THEME = MainUiTheme(
     install_button_text_color=_INSTALL_BUTTON_TEXT,
     install_button_border_disabled_color=_INSTALL_BUTTON_BORDER_DISABLED,
 )
+APP_CONTROLLER_FACTORY_CONFIG = AppControllerFactoryConfig(
+    assets_dir=ASSETS_DIR,
+    create_prefixed_logger=get_prefixed_logger,
+    default_sheet_gid=SHEET_GID,
+    download_links_gid=DOWNLOAD_LINKS_SHEET_GID,
+    gpu_notice_theme=GPU_NOTICE_THEME,
+    gpu_vendor_db_gids=GPU_VENDOR_DB_GIDS,
+    max_supported_gpu_count=MAX_SUPPORTED_GPU_COUNT,
+    message_popup_theme=MESSAGE_POPUP_THEME,
+    optipatcher_url=OPTIPATCHER_URL,
+    root_width_fallback=WINDOW_W,
+    root_height_fallback=WINDOW_H,
+    rtss_theme=RTSS_NOTICE_THEME,
+    sheet_id=SHEET_ID,
+    supported_games_wiki_url=SUPPORTED_GAMES_WIKI_URL,
+    use_korean=USE_KOREAN,
+)
 
 class OptiManagerApp:
+    def __getattr__(self, name: str):
+        return get_runtime_state_attr(self, name)
+
+    def __setattr__(self, name: str, value) -> None:
+        if set_runtime_state_attr(self, name, value):
+            return
+
+        object.__setattr__(self, name, value)
+
     def __init__(self, root: ctk.CTk):
         self.root = root
         self.lang = APP_LANG
@@ -518,45 +544,22 @@ class OptiManagerApp:
         )
 
         self.game_folder = ""
-        self.opti_source_archive = ""
-        self.fsr4_source_archive = ""
+        runtime_state_bundle = build_runtime_state_bundle(
+            checking_gpu_text=self.txt.main.checking_gpu,
+            default_sheet_gid=SHEET_GID,
+        )
+        self.archive_state = runtime_state_bundle.archive_state
         self.optiscaler_cache_dir = OPTISCALER_CACHE_DIR
         self.optiscaler_cache_dir.mkdir(parents=True, exist_ok=True)
         self.fsr4_cache_dir = FSR4_CACHE_DIR
         self.fsr4_cache_dir.mkdir(parents=True, exist_ok=True)
-        self.optiscaler_archive_ready = False
-        self.optiscaler_archive_downloading = False
-        self.optiscaler_archive_error = ""
-        self.optiscaler_archive_filename = ""
-        self.fsr4_archive_ready = False
-        self.fsr4_archive_downloading = False
-        self.fsr4_archive_error = ""
-        self.fsr4_archive_filename = ""
         self.found_exe_list = []
-        self.game_db = {}
-        self.module_download_links = {}
-        self.active_game_db_vendor = "default"
-        self.active_game_db_gid = SHEET_GID
-        self.gpu_names: list[str] = []
-        self.gpu_count = 0
-        self.is_multi_gpu = False
-        self.multi_gpu_blocked = False
-        self._gpu_selection_pending = False
-        self._gpu_context: Optional[gpu_service.GpuContext] = None
-        self._selected_gpu_adapter: Optional[gpu_service.GpuAdapterChoice] = None
-        self.sheet_status = False
-        self.sheet_loading = True
-        self.gpu_info = self.txt.main.checking_gpu
-        self.install_in_progress = False
-        self.selected_game_index = None
-        self._game_popup_confirmed = False
-        self.install_precheck_running = False
-        self.install_precheck_ok = False
-        self.install_precheck_error = ""
-        self.install_precheck_dll_name = ""
+        self.gpu_state = runtime_state_bundle.gpu_state
+        self.sheet_state = runtime_state_bundle.sheet_state
+        self.install_state = runtime_state_bundle.install_state
+        self.card_ui_state = runtime_state_bundle.card_ui_state
         self.card_frames: list = []
         self.card_items: list = []
-        self._hovered_card_index = None
         self._grid_cols_current = GRID_COLS
         self._resize_after_id = None
         self._resize_visual_after_id = None
@@ -572,6 +575,10 @@ class OptiManagerApp:
         self._game_db_controller: Optional[GameDbLoadController] = None
         self._gpu_flow_controller: Optional[GpuFlowController] = None
         self._header_status_presenter: Optional[HeaderStatusPresenter] = None
+        self._app_controllers: Optional[AppControllers] = None
+        self._install_flow_controller: Optional[InstallFlowController] = None
+        self._card_viewport_controller: Optional[CardViewportController] = None
+        self._card_viewport_runtime: Optional[CardViewportRuntime] = None
         self._card_render_controller: Optional[CardRenderController] = None
         self._install_selection_controller: Optional[InstallSelectionController] = None
         self._scan_entry_controller: Optional[ScanEntryController] = None
@@ -613,7 +620,7 @@ class OptiManagerApp:
                 show_startup_warning_popup=self._show_startup_warning_popup,
             ),
             is_multi_gpu_blocked=self._is_multi_gpu_block_active,
-            get_startup_warning_text=lambda: pick_module_message(self.module_download_links, "warning", self.lang),
+            get_startup_warning_text=lambda: pick_module_message(self.sheet_state.module_download_links, "warning", self.lang),
             logger=logging.getLogger(),
         )
         self._task_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="general-task")
@@ -647,17 +654,9 @@ class OptiManagerApp:
             logger=logging.getLogger(),
         )
         self.setup_ui()
-        self._create_app_shutdown_controller()
-        self._create_app_actions_controller()
-        self._create_app_notice_controller()
-        self._create_archive_controller()
-        self._create_game_db_controller()
-        self._create_gpu_flow_controller()
-        self._create_scan_feedback_controller()
-        self._create_scan_controller()
-        self._create_scan_entry_controller()
-        self._create_install_selection_controller()
-        self._create_card_render_controller()
+        self._create_card_viewport_controller()
+        self._app_controllers = build_app_controllers(self, APP_CONTROLLER_FACTORY_CONFIG)
+        bind_app_controllers(self, self._app_controllers)
         if self._gpu_flow_controller is not None:
             self._gpu_flow_controller.start_detection()
         self.root.bind("<Configure>", self._on_root_resize)
@@ -709,110 +708,6 @@ class OptiManagerApp:
         normalized_gpu = str(gpu_info or "").strip() or self.txt.main.unknown_gpu
         return self.txt.main.gpu_label_template.format(gpu=normalized_gpu)
 
-    def _create_app_notice_controller(self) -> None:
-        self._app_notice_controller = AppNoticeController(
-            root=self.root,
-            popup_theme=MESSAGE_POPUP_THEME,
-            schedule_idle=self.root.after_idle,
-            installer_notice_title=self.txt.dialogs.installer_notice_title,
-            warning_title=self.txt.common.warning,
-            notice_title=self.txt.common.notice,
-            error_title=self.txt.common.error,
-            confirm_text=self.txt.common.ok,
-            wiki_url=SUPPORTED_GAMES_WIKI_URL,
-            wiki_not_configured_detail=self.txt.dialogs.wiki_not_configured_detail,
-            wiki_open_failed_detail=self.txt.dialogs.wiki_open_failed_detail,
-            installation_completed_text=self.txt.dialogs.installation_completed,
-            root_width_fallback=WINDOW_W,
-            root_height_fallback=WINDOW_H,
-            logger=logging.getLogger(),
-        )
-
-    def _create_app_actions_controller(self) -> None:
-        self._app_actions_controller = AppActionsController(
-            root=self.root,
-            callbacks=AppActionCallbacks(
-                show_close_while_installing_warning=lambda: messagebox.showwarning(
-                    self.txt.common.warning,
-                    self.txt.dialogs.close_while_installing_body,
-                ),
-                perform_shutdown=self._shutdown_app,
-                check_for_update=lambda module_download_links, blocked: self._app_update_manager.check_for_update(
-                    module_download_links,
-                    blocked=blocked,
-                ),
-                create_prefixed_logger=get_prefixed_logger,
-            ),
-            use_korean=USE_KOREAN,
-            assets_dir=ASSETS_DIR,
-            rtss_theme=RTSS_NOTICE_THEME,
-        )
-
-    def _create_app_shutdown_controller(self) -> None:
-        self._app_shutdown_controller = AppShutdownController(
-            callbacks=AppShutdownCallbacks(
-                best_effort_steps=(
-                    AppShutdownStep(
-                        "cancel scrollregion after",
-                        lambda: self._cancel_after_handle("_games_scrollregion_after_id"),
-                    ),
-                    AppShutdownStep(
-                        "cancel viewport after",
-                        lambda: self._cancel_after_handle("_games_viewport_after_id"),
-                    ),
-                    AppShutdownStep(
-                        "cancel overflow fit after",
-                        lambda: self._cancel_after_handle("_overflow_fit_after_id"),
-                    ),
-                    AppShutdownStep(
-                        "shutdown header status presenter",
-                        lambda: self._call_optional_method("_header_status_presenter", "shutdown"),
-                    ),
-                    AppShutdownStep(
-                        "shutdown poster queue",
-                        lambda: self._call_optional_method("_poster_queue", "shutdown"),
-                    ),
-                    AppShutdownStep(
-                        "shutdown image executor",
-                        lambda: self._call_optional_method(
-                            "_image_executor",
-                            "shutdown",
-                            wait=False,
-                            cancel_futures=True,
-                        ),
-                    ),
-                    AppShutdownStep(
-                        "shutdown task executor",
-                        lambda: self._call_optional_method(
-                            "_task_executor",
-                            "shutdown",
-                            wait=False,
-                            cancel_futures=True,
-                        ),
-                    ),
-                    AppShutdownStep(
-                        "shutdown download executor",
-                        lambda: self._call_optional_method(
-                            "_download_executor",
-                            "shutdown",
-                            wait=False,
-                            cancel_futures=True,
-                        ),
-                    ),
-                    AppShutdownStep(
-                        "close poster loader",
-                        lambda: self._call_optional_method("_poster_loader", "close"),
-                    ),
-                    AppShutdownStep(
-                        "shutdown app update manager",
-                        lambda: self._call_optional_method("_app_update_manager", "shutdown"),
-                    ),
-                ),
-                destroy_root=self.root.destroy,
-            ),
-            logger=logging.getLogger(),
-        )
-
     def _show_game_selection_popup(
         self,
         message_text: str,
@@ -834,16 +729,16 @@ class OptiManagerApp:
         controller.show_precheck_popup(message_text, on_close=on_close)
 
     def _is_multi_gpu_block_active(self) -> bool:
-        return self.gpu_count > MAX_SUPPORTED_GPU_COUNT
+        return self.gpu_state.gpu_count > MAX_SUPPORTED_GPU_COUNT
 
     def _is_game_supported_for_current_gpu(self, game_data: dict) -> bool:
-        return gpu_service.matches_gpu_rule(str(game_data.get("supported_gpu", "") or ""), self.gpu_info)
+        return gpu_service.matches_gpu_rule(str(game_data.get("supported_gpu", "") or ""), self.gpu_state.gpu_info)
 
     def _matches_fsr4_skip_rule(self, rule_text: str) -> bool:
         return gpu_service.matches_gpu_rule(FSR4_SKIP_GPU_RULE, rule_text)
 
     def _should_apply_fsr4_for_game(self, game_data: Optional[dict] = None) -> bool:
-        if self._matches_fsr4_skip_rule(self.gpu_info):
+        if self._matches_fsr4_skip_rule(self.gpu_state.gpu_info):
             return False
 
         if isinstance(game_data, dict):
@@ -893,7 +788,7 @@ class OptiManagerApp:
     def _get_selected_game_header_text(self) -> str:
         selection = build_selected_game_snapshot(
             self.found_exe_list,
-            self.selected_game_index,
+            self.card_ui_state.selected_game_index,
             getattr(self, "lang", "en"),
         )
         return selection.header_text
@@ -931,6 +826,46 @@ class OptiManagerApp:
             return
         getattr(target, method_name)(*args, **kwargs)
 
+    def _sync_card_viewport_runtime_to_app(self) -> None:
+        runtime = getattr(self, "_card_viewport_runtime", None)
+        if runtime is None:
+            return
+
+        self._grid_cols_current = max(1, int(runtime.grid_cols_current or GRID_COLS))
+        self._resize_after_id = runtime.resize_after_id
+        self._resize_visual_after_id = runtime.resize_visual_after_id
+        self._resize_in_progress = bool(runtime.resize_in_progress)
+        self._last_reflow_width = max(0, int(runtime.last_reflow_width or 0))
+        self._base_root_width = runtime.base_root_width
+        self._games_scrollregion_after_id = runtime.games_scrollregion_after_id
+        self._games_viewport_after_id = runtime.games_viewport_after_id
+        self._overflow_fit_after_id = runtime.overflow_fit_after_id
+
+    def _get_card_viewport_controller(self) -> Optional[CardViewportController]:
+        return getattr(self, "_card_viewport_controller", None)
+
+    def _get_install_flow_controller(self) -> Optional[InstallFlowController]:
+        controller = getattr(self, "_install_flow_controller", None)
+        if controller is None and hasattr(self, "root"):
+            controller = create_install_flow_controller(
+                self,
+                optipatcher_url=OPTIPATCHER_URL,
+                create_prefixed_logger=get_prefixed_logger,
+            )
+            self._install_flow_controller = controller
+        return controller
+
+    def _set_install_button_busy(self) -> None:
+        if not hasattr(self, "apply_btn"):
+            return
+        self.apply_btn.configure(
+            state="disabled",
+            text=self.txt.main.installing_button,
+            fg_color=_INSTALL_BUTTON_DISABLED,
+            hover_color=_INSTALL_BUTTON_DISABLED,
+            border_color=_INSTALL_BUTTON_BORDER_DISABLED,
+        )
+
     def _update_install_button_state(self):
         if not hasattr(self, "apply_btn"):
             return
@@ -948,27 +883,31 @@ class OptiManagerApp:
         )
 
     def _build_install_button_state_inputs(self) -> InstallButtonStateInputs:
+        gpu_state = self.gpu_state
+        sheet_state = self.sheet_state
+        install_state = self.install_state
+        archive_state = self.archive_state
         selection = build_selected_game_snapshot(
             self.found_exe_list,
-            self.selected_game_index,
+            self.card_ui_state.selected_game_index,
             getattr(self, "lang", "en"),
         )
         app_update_manager = getattr(self, "_app_update_manager", None)
         return build_install_button_state_inputs(
             selection=selection,
-            multi_gpu_blocked=bool(self.multi_gpu_blocked),
-            gpu_selection_pending=bool(self._gpu_selection_pending),
-            sheet_ready=bool(self.sheet_status),
-            sheet_loading=bool(self.sheet_loading),
-            install_in_progress=bool(self.install_in_progress),
+            multi_gpu_blocked=bool(gpu_state.multi_gpu_blocked),
+            gpu_selection_pending=bool(gpu_state.gpu_selection_pending),
+            sheet_ready=bool(sheet_state.status),
+            sheet_loading=bool(sheet_state.loading),
+            install_in_progress=bool(install_state.in_progress),
             app_update_in_progress=bool(getattr(app_update_manager, "in_progress", False)),
-            install_precheck_running=bool(self.install_precheck_running),
-            install_precheck_ok=bool(self.install_precheck_ok),
-            optiscaler_archive_ready=bool(self.optiscaler_archive_ready),
-            optiscaler_archive_downloading=bool(self.optiscaler_archive_downloading),
-            fsr4_archive_ready=bool(self.fsr4_archive_ready),
-            fsr4_archive_downloading=bool(self.fsr4_archive_downloading),
-            game_popup_confirmed=bool(getattr(self, "_game_popup_confirmed", False)),
+            install_precheck_running=bool(install_state.precheck_running),
+            install_precheck_ok=bool(install_state.precheck_ok),
+            optiscaler_archive_ready=bool(archive_state.optiscaler_ready),
+            optiscaler_archive_downloading=bool(archive_state.optiscaler_downloading),
+            fsr4_archive_ready=bool(archive_state.fsr4_ready),
+            fsr4_archive_downloading=bool(archive_state.fsr4_downloading),
+            game_popup_confirmed=bool(install_state.popup_confirmed),
             is_game_supported=self._is_game_supported_for_current_gpu,
             should_apply_fsr4=self._should_apply_fsr4_for_game,
         )
@@ -981,7 +920,7 @@ class OptiManagerApp:
         controller = getattr(self, "_app_actions_controller", None)
         if controller is None:
             return
-        controller.request_close(bool(self.install_in_progress))
+        controller.request_close(bool(self.install_state.in_progress))
 
     def _shutdown_app(self) -> None:
         controller = getattr(self, "_app_shutdown_controller", None)
@@ -993,39 +932,42 @@ class OptiManagerApp:
         if self._game_db_controller is None:
             return
 
-        game_db_gid = int(getattr(self, "active_game_db_gid", SHEET_GID) or SHEET_GID)
-        game_db_vendor = str(getattr(self, "active_game_db_vendor", "default") or "default")
+        sheet_state = self.sheet_state
+        game_db_gid = int(sheet_state.active_gid or SHEET_GID)
+        game_db_vendor = str(sheet_state.active_vendor or "default")
         started = self._game_db_controller.start_load(game_db_gid, game_db_vendor)
         if not started:
             return
         logging.info(
             "[APP] Starting Game DB load for vendor=%s gpu=%s",
             game_db_vendor,
-            self.gpu_info,
+            self.gpu_state.gpu_info,
         )
 
     def _on_game_db_loaded(self, result: GameDbLoadResult) -> None:
-        self.sheet_loading = False
-        self.active_game_db_gid = int(result.game_db_gid)
-        self.active_game_db_vendor = str(result.game_db_vendor or "default")
-        self.game_db = result.game_db if result.ok else {}
-        self.module_download_links = result.module_download_links if result.ok else {}
+        sheet_state = self.sheet_state
+        gpu_state = self.gpu_state
+        sheet_state.loading = False
+        sheet_state.active_gid = int(result.game_db_gid)
+        sheet_state.active_vendor = str(result.game_db_vendor or "default")
+        sheet_state.game_db = result.game_db if result.ok else {}
+        sheet_state.module_download_links = result.module_download_links if result.ok else {}
 
-        self.sheet_status = result.ok
+        sheet_state.status = result.ok
         if result.ok:
             logging.info(
                 "[APP] Game DB loaded successfully: vendor=%s, games=%d, module_links=%d",
-                self.active_game_db_vendor,
-                len(self.game_db),
-                len(self.module_download_links),
+                sheet_state.active_vendor,
+                len(sheet_state.game_db),
+                len(sheet_state.module_download_links),
             )
         else:
             logging.error(
                 "[APP] Failed to load Game DB for vendor=%s: %s",
-                self.active_game_db_vendor,
+                sheet_state.active_vendor,
                 result.error,
             )
-        if self.multi_gpu_blocked:
+        if gpu_state.multi_gpu_blocked:
             self._update_install_button_state()
             self._update_sheet_status()
             return
@@ -1039,7 +981,8 @@ class OptiManagerApp:
     def _start_optiscaler_archive_prepare(self):
         if self._archive_controller is None:
             return
-        entry = self.module_download_links.get("optiscaler", {}) if hasattr(self, "module_download_links") else {}
+        sheet_state = self.sheet_state
+        entry = sheet_state.module_download_links.get("optiscaler", {})
         state = self._archive_controller.prepare_optiscaler(entry, self.optiscaler_cache_dir)
         self._apply_optiscaler_archive_state(state)
         if state.downloading:
@@ -1053,8 +996,8 @@ class OptiManagerApp:
             return
         enabled = self._should_apply_fsr4_for_game()
         if not enabled:
-            logging.info("[APP] Skipping FSR4 preparation for GPU: %s", self.gpu_info)
-        entry = self.module_download_links.get("fsr4int8", {}) if hasattr(self, "module_download_links") else {}
+            logging.info("[APP] Skipping FSR4 preparation for GPU: %s", self.gpu_state.gpu_info)
+        entry = self.sheet_state.module_download_links.get("fsr4int8", {})
         state = self._archive_controller.prepare_fsr4(
             entry,
             self.fsr4_cache_dir,
@@ -1068,8 +1011,8 @@ class OptiManagerApp:
         if controller is None:
             return False
         return controller.check_app_update(
-            self.module_download_links,
-            blocked=bool(self.multi_gpu_blocked),
+            self.sheet_state.module_download_links,
+            blocked=bool(self.gpu_state.multi_gpu_blocked),
         )
 
     def _show_rtss_notice(self) -> None:
@@ -1078,9 +1021,9 @@ class OptiManagerApp:
             return
         controller.show_rtss_notice(
             tuple(self.found_exe_list),
-            self.selected_game_index,
+            self.card_ui_state.selected_game_index,
             getattr(self, "lang", "en"),
-            self.module_download_links,
+            self.sheet_state.module_download_links,
         )
 
     def _show_startup_warning_popup(
@@ -1098,31 +1041,41 @@ class OptiManagerApp:
         return bool(controller and controller.is_scan_in_progress)
 
     def _apply_gpu_flow_state(self, state: GpuFlowState) -> None:
-        self._gpu_context = state.gpu_context
-        self.gpu_names = list(state.gpu_names or ())
-        self.gpu_count = max(0, int(state.gpu_count or 0))
-        self.is_multi_gpu = bool(state.is_multi_gpu)
-        self.multi_gpu_blocked = bool(state.multi_gpu_blocked)
-        self._gpu_selection_pending = bool(state.gpu_selection_pending)
-        self._selected_gpu_adapter = state.selected_adapter
+        gpu_state = self.gpu_state
+        sheet_state = self.sheet_state
+        gpu_state.gpu_context = state.gpu_context
+        gpu_state.gpu_names = list(state.gpu_names or ())
+        gpu_state.gpu_count = max(0, int(state.gpu_count or 0))
+        gpu_state.is_multi_gpu = bool(state.is_multi_gpu)
+        gpu_state.multi_gpu_blocked = bool(state.multi_gpu_blocked)
+        gpu_state.gpu_selection_pending = bool(state.gpu_selection_pending)
+        gpu_state.selected_adapter = state.selected_adapter
 
         if state.game_db_vendor is not None:
-            self.active_game_db_vendor = str(state.game_db_vendor or "default")
+            sheet_state.active_vendor = str(state.game_db_vendor or "default")
         if state.game_db_gid is not None:
-            self.active_game_db_gid = int(state.game_db_gid or SHEET_GID)
+            sheet_state.active_gid = int(state.game_db_gid or SHEET_GID)
 
-        self.gpu_info = str(state.gpu_info or self.txt.main.unknown_gpu).strip() or self.txt.main.unknown_gpu
+        gpu_state.gpu_info = str(state.gpu_info or self.txt.main.unknown_gpu).strip() or self.txt.main.unknown_gpu
         if hasattr(self, "gpu_lbl") and self.gpu_lbl:
-            self.gpu_lbl.configure(text=self._format_gpu_label_text(self.gpu_info))
+            self.gpu_lbl.configure(text=self._format_gpu_label_text(gpu_state.gpu_info))
 
     def _handle_unsupported_gpu_block(self, scan_status_message: str, info_text: str) -> None:
+        sheet_state = self.sheet_state
+        install_state = self.install_state
+        card_ui_state = self.card_ui_state
         self._startup_flow.mark_post_sheet_startup_done()
-        self.sheet_loading = False
-        self.sheet_status = False
-        self.game_db = {}
-        self.module_download_links = {}
+        sheet_state.loading = False
+        sheet_state.status = False
+        sheet_state.game_db = {}
+        sheet_state.module_download_links = {}
         self.found_exe_list = []
-        self.selected_game_index = None
+        card_ui_state.selected_game_index = None
+        install_state.popup_confirmed = False
+        install_state.precheck_running = False
+        install_state.precheck_ok = False
+        install_state.precheck_error = ""
+        install_state.precheck_dll_name = ""
         self._apply_install_selection_state(
             InstallSelectionUiState(
                 popup_confirmed=False,
@@ -1141,79 +1094,21 @@ class OptiManagerApp:
         self._update_sheet_status()
         self._update_install_button_state()
 
-    def _create_gpu_flow_controller(self) -> None:
-        self._gpu_flow_controller = GpuFlowController(
-            executor=self._task_executor,
-            schedule=lambda callback: self.root.after(0, callback),
-            callbacks=GpuFlowCallbacks(
-                apply_state=self._apply_gpu_flow_state,
-                handle_unsupported_gpu=self._handle_unsupported_gpu_block,
-                set_scan_status_message=self._set_scan_status_message,
-                update_sheet_status=self._update_sheet_status,
-                update_install_button_state=self._update_install_button_state,
-                start_game_db_load=self._start_game_db_load_async,
-            ),
-            vendor_db_gids=GPU_VENDOR_DB_GIDS,
-            default_gid=SHEET_GID,
-            unknown_gpu_text=self.txt.main.unknown_gpu,
-            waiting_for_gpu_selection_text=self.txt.main.waiting_for_gpu_selection,
-            unsupported_gpu_message=self.txt.gpu.unsupported_message,
-            unsupported_gpu_info_text=gpu_notice.get_unsupported_gpu_message(self.txt),
-            detect_gpu_context=gpu_service.detect_gpu_context,
-            select_dual_gpu_adapter=lambda adapters: gpu_notice.select_dual_gpu_adapter(
-                root=self.root,
-                adapters=adapters,
-                strings=self.txt,
-                theme=GPU_NOTICE_THEME,
-            ),
-            show_unsupported_gpu_notice=lambda: gpu_notice.show_unsupported_gpu_notice(
-                self.root,
-                self.txt,
-                GPU_NOTICE_THEME,
-            ),
-            max_supported_gpu_count=MAX_SUPPORTED_GPU_COUNT,
-            logger=logging.getLogger(),
-        )
-
-    def _create_archive_controller(self) -> None:
-        self._archive_controller = ArchivePreparationController(
-            executor=self._download_executor,
-            schedule=lambda callback: self.root.after(0, callback),
-            callbacks=ArchivePreparationCallbacks(
-                on_optiscaler_state_changed=self._on_optiscaler_archive_state_changed,
-                on_fsr4_state_changed=self._on_fsr4_archive_state_changed,
-            ),
-            download_to_file=installer_services.download_to_file,
-            logger=logging.getLogger(),
-        )
-
-    def _create_game_db_controller(self) -> None:
-        self._game_db_controller = GameDbLoadController(
-            executor=self._task_executor,
-            schedule=lambda callback: self.root.after(0, callback),
-            callbacks=GameDbControllerCallbacks(
-                on_load_complete=self._on_game_db_loaded,
-            ),
-            spreadsheet_id=SHEET_ID,
-            download_links_gid=DOWNLOAD_LINKS_SHEET_GID,
-            load_game_db=sheet_loader.load_game_db_from_public_sheet,
-            load_module_download_links=sheet_loader.load_module_download_links_from_public_sheet,
-            logger=logging.getLogger(),
-        )
-
     def _apply_optiscaler_archive_state(self, state: ArchivePreparationState) -> None:
-        self.optiscaler_archive_filename = str(state.filename or "")
-        self.optiscaler_archive_ready = bool(state.ready)
-        self.optiscaler_archive_downloading = bool(state.downloading)
-        self.optiscaler_archive_error = str(state.error_message or "")
-        self.opti_source_archive = str(state.archive_path or "")
+        archive_state = self.archive_state
+        archive_state.optiscaler_filename = str(state.filename or "")
+        archive_state.optiscaler_ready = bool(state.ready)
+        archive_state.optiscaler_downloading = bool(state.downloading)
+        archive_state.optiscaler_error = str(state.error_message or "")
+        archive_state.opti_source_archive = str(state.archive_path or "")
 
     def _apply_fsr4_archive_state(self, state: ArchivePreparationState) -> None:
-        self.fsr4_archive_filename = str(state.filename or "")
-        self.fsr4_archive_ready = bool(state.ready)
-        self.fsr4_archive_downloading = bool(state.downloading)
-        self.fsr4_archive_error = str(state.error_message or "")
-        self.fsr4_source_archive = str(state.archive_path or "")
+        archive_state = self.archive_state
+        archive_state.fsr4_filename = str(state.filename or "")
+        archive_state.fsr4_ready = bool(state.ready)
+        archive_state.fsr4_downloading = bool(state.downloading)
+        archive_state.fsr4_error = str(state.error_message or "")
+        archive_state.fsr4_source_archive = str(state.archive_path or "")
 
     def _on_optiscaler_archive_state_changed(self, state: ArchivePreparationState) -> None:
         self._apply_optiscaler_archive_state(state)
@@ -1224,110 +1119,43 @@ class OptiManagerApp:
         self._apply_fsr4_archive_state(state)
         self._update_install_button_state()
 
-    def _create_scan_controller(self) -> None:
-        scan_feedback = self._scan_feedback_controller
-        if scan_feedback is None:
-            return
-        self._scan_controller = ScanController(
-            executor=self._task_executor,
-            schedule=lambda callback: self.root.after(0, callback),
-            callbacks=ScanControllerCallbacks(
-                prepare_scan_ui=scan_feedback.prepare_scan_ui,
-                reset_scan_results=self._reset_scan_results_for_new_scan,
-                add_game_card=self._add_game_card_incremental,
-                finish_scan_ui=scan_feedback.finish_scan_ui,
-                pump_poster_queue=self._pump_poster_queue,
-                show_auto_scan_empty_popup=scan_feedback.enqueue_initial_auto_scan_empty_popup,
-                show_manual_scan_empty_popup=scan_feedback.show_manual_scan_empty_popup,
-                show_select_game_hint=scan_feedback.show_select_game_hint,
-            ),
-            get_game_db=lambda: self.game_db,
-            get_lang=lambda: self.lang,
-            is_game_supported=self._is_game_supported_for_current_gpu,
-            logger=logging.getLogger(),
+    def _create_card_viewport_controller(self) -> None:
+        self._card_viewport_runtime = CardViewportRuntime(
+            grid_cols_current=max(1, int(getattr(self, "_grid_cols_current", GRID_COLS) or GRID_COLS)),
+            resize_after_id=getattr(self, "_resize_after_id", None),
+            resize_visual_after_id=getattr(self, "_resize_visual_after_id", None),
+            resize_in_progress=bool(getattr(self, "_resize_in_progress", False)),
+            last_reflow_width=max(0, int(getattr(self, "_last_reflow_width", 0) or 0)),
+            base_root_width=getattr(self, "_base_root_width", None),
+            games_scrollregion_after_id=getattr(self, "_games_scrollregion_after_id", None),
+            games_viewport_after_id=getattr(self, "_games_viewport_after_id", None),
+            overflow_fit_after_id=getattr(self, "_overflow_fit_after_id", None),
         )
-
-    def _create_scan_feedback_controller(self) -> None:
-        self._scan_feedback_controller = ScanFeedbackController(
+        self._card_viewport_controller = CardViewportController(
             root=self.root,
-            callbacks=ScanFeedbackCallbacks(
-                set_scan_status_message=self._set_scan_status_message,
-                set_select_folder_enabled=lambda enabled: self.btn_select_folder.configure(
-                    state="normal" if enabled else "disabled"
-                ),
-                set_information_text=self._set_information_text,
-                enqueue_startup_popup=lambda popup_id, priority, show_callback, blocking=False: self._startup_flow.enqueue_popup(
-                    popup_id,
-                    priority=priority,
-                    show_callback=show_callback,
-                    blocking=blocking,
-                ),
-                run_next_startup_popup=self._startup_flow.run_next_popup,
+            games_scroll=self.games_scroll,
+            poster_queue=self._poster_queue,
+            runtime=self._card_viewport_runtime,
+            callbacks=CardViewportCallbacks(
+                get_card_frames=lambda: tuple(self.card_frames),
+                has_found_games=lambda: bool(self.found_exe_list),
+                render_cards=lambda keep_selection: self._render_cards(keep_selection=keep_selection),
+                get_effective_widget_scale=self._get_effective_widget_scale,
+                publish_runtime_state=self._sync_card_viewport_runtime_to_app,
             ),
-            popup_theme=MESSAGE_POPUP_THEME,
-            popup_title=self.txt.main.scan_result_title,
-            popup_confirm_text=self.txt.common.ok,
-            scanning_text=self.txt.main.scanning,
-            manual_scan_no_results_text=self.txt.main.manual_scan_no_results,
-            auto_scan_no_results_text=self.txt.main.auto_scan_no_results,
-            select_game_hint_text=self.txt.main.select_game_hint,
-            root_width_fallback=WINDOW_W,
-            root_height_fallback=WINDOW_H,
+            card_width=CARD_W,
+            card_h_spacing=CARD_H_SPACING,
+            card_v_spacing=CARD_V_SPACING,
             logger=logging.getLogger(),
         )
-
-    def _create_scan_entry_controller(self) -> None:
-        self._scan_entry_controller = ScanEntryController(
-            callbacks=ScanEntryCallbacks(
-                show_info=messagebox.showinfo,
-                show_error=messagebox.showerror,
-                ask_directory=filedialog.askdirectory,
-                set_selected_folder=self._set_game_folder,
-                start_manual_scan=self._start_manual_scan_from_folder,
-            ),
-            game_db_loading_title=self.txt.dialogs.game_db_loading_title,
-            game_db_loading_body=self.txt.dialogs.game_db_loading_body,
-            game_db_error_title=self.txt.dialogs.game_db_error_title,
-            game_db_error_body=self.txt.dialogs.game_db_error_body,
-        )
-
-    def _create_install_selection_controller(self) -> None:
-        self._install_selection_controller = InstallSelectionController(
-            schedule=lambda callback: self.root.after_idle(callback),
-            callbacks=InstallSelectionCallbacks(
-                apply_selected_index=self._apply_selected_game_index,
-                set_information_text=self._set_information_text,
-                apply_ui_state=self._apply_install_selection_state,
-                update_install_button_state=self._update_install_button_state,
-                run_precheck=self._run_install_precheck,
-                get_selection_popup_message=lambda game: pick_sheet_text(game, "popup", self.lang),
-                show_selection_popup=self._show_game_selection_popup,
-                show_precheck_popup=self._show_precheck_popup,
-            ),
-            logger=logging.getLogger(),
-        )
-
-    def _create_card_render_controller(self) -> None:
-        self._card_render_controller = CardRenderController(
-            callbacks=CardRenderCallbacks(
-                append_found_game=self._append_found_game,
-                clear_cards=self._clear_cards,
-                hide_empty_label=self._hide_empty_label,
-                configure_card_columns=self._configure_card_columns,
-                create_and_place_card=self._create_and_place_card,
-                fit_cards_to_visible_width=self._fit_cards_to_visible_width,
-                restore_selection=self._restore_rendered_selection,
-                schedule_scrollregion_refresh=self._schedule_games_scrollregion_refresh,
-                pump_poster_queue=self._pump_poster_queue,
-            )
-        )
+        self._sync_card_viewport_runtime_to_app()
 
     def _pump_poster_queue(self) -> None:
         self._poster_queue.pump()
 
     def _start_auto_scan(self):
         """Kick off a silent auto-scan of known Steam/game directories."""
-        if self.multi_gpu_blocked:
+        if self.gpu_state.multi_gpu_blocked:
             return
         if self._scan_controller is None:
             return
@@ -1354,8 +1182,8 @@ class OptiManagerApp:
             return
         presenter.refresh_optiscaler_archive_info_ui(
             getattr(self, "lbl_optiscaler_version_line", None),
-            sheet_loading=bool(getattr(self, "sheet_loading", False)),
-            module_download_links=self.module_download_links if hasattr(self, "module_download_links") else {},
+            sheet_loading=bool(self.sheet_state.loading),
+            module_download_links=self.sheet_state.module_download_links,
             version_line_template=self.txt.main.version_line_template,
         )
 
@@ -1373,13 +1201,15 @@ class OptiManagerApp:
         presenter = self._header_status_presenter
         if presenter is None:
             return
+        gpu_state = self.gpu_state
+        sheet_state = self.sheet_state
         presenter.update_sheet_status(
             label_widget=getattr(self, "status_badge_label", None),
             dot_widget=getattr(self, "status_badge_dot", None),
-            multi_gpu_blocked=self.multi_gpu_blocked,
-            gpu_selection_pending=self._gpu_selection_pending,
-            sheet_loading=self.sheet_loading,
-            sheet_status=self.sheet_status,
+            multi_gpu_blocked=gpu_state.multi_gpu_blocked,
+            gpu_selection_pending=gpu_state.gpu_selection_pending,
+            sheet_loading=sheet_state.loading,
+            sheet_status=sheet_state.status,
             status_gpu_config_text=self.txt.main.status_gpu_config,
             status_gpu_select_text=self.txt.main.status_gpu_select,
             status_game_db_text=self.txt.main.status_game_db,
@@ -1408,7 +1238,7 @@ class OptiManagerApp:
     # ------------------------------------------------------------------
 
     def _reset_selected_game_state(self) -> None:
-        self.selected_game_index = None
+        self.card_ui_state.selected_game_index = None
         self._apply_install_selection_state(
             InstallSelectionUiState(
                 popup_confirmed=False,
@@ -1419,16 +1249,17 @@ class OptiManagerApp:
         self._set_information_text("")
 
     def _apply_selected_game_index(self, index: int) -> None:
-        self.selected_game_index = int(index)
+        self.card_ui_state.selected_game_index = int(index)
         self._update_selected_game_header()
         self._refresh_all_card_visuals()
 
     def _apply_install_selection_state(self, state: InstallSelectionUiState) -> None:
-        self._game_popup_confirmed = bool(state.popup_confirmed)
-        self.install_precheck_running = bool(state.precheck_running)
-        self.install_precheck_ok = bool(state.precheck_ok)
-        self.install_precheck_error = str(state.precheck_error or "")
-        self.install_precheck_dll_name = str(state.precheck_dll_name or "")
+        install_state = self.install_state
+        install_state.popup_confirmed = bool(state.popup_confirmed)
+        install_state.precheck_running = bool(state.precheck_running)
+        install_state.precheck_ok = bool(state.precheck_ok)
+        install_state.precheck_error = str(state.precheck_error or "")
+        install_state.precheck_dll_name = str(state.precheck_dll_name or "")
 
     def _clear_rendered_cards(self) -> None:
         self._poster_queue.begin_new_render()
@@ -1437,7 +1268,7 @@ class OptiManagerApp:
         self.card_frames.clear()
         self.card_items.clear()
         self._ctk_images.clear()  # Release stale PhotoImage refs to prevent accumulation.
-        self._hovered_card_index = None
+        self.card_ui_state.hovered_card_index = None
 
     def _reset_scan_results_for_new_scan(self) -> None:
         self.found_exe_list = []
@@ -1472,7 +1303,7 @@ class OptiManagerApp:
         self.card_frames.append(card)
 
     def _restore_rendered_selection(self, index: int, game: dict) -> None:
-        self.selected_game_index = int(index)
+        self.card_ui_state.selected_game_index = int(index)
         self._refresh_all_card_visuals()
         self._set_information_text(game.get("information", ""))
 
@@ -1480,290 +1311,159 @@ class OptiManagerApp:
         return _get_ctk_scale(self.root, 1.0)
 
     def _get_forced_card_area_width(self) -> int:
-        canvas = getattr(self.games_scroll, "_parent_canvas", None)
-        if canvas is not None:
-            width = int(canvas.winfo_width() or 0)
-            if width > 1:
-                return width
-
-        try:
-            scroll_w = int(self.games_scroll.winfo_width() or 0)
-            if scroll_w > 1:
-                return scroll_w
-        except Exception:
-            pass
-
-        window_w = max(1, int(self.root.winfo_width() or 0))
-        scale = self._get_effective_widget_scale()
-        # Startup fallback is intentionally conservative to avoid right overflow before widgets settle.
-        safe_margin = int(round(240 * scale))
-        return max(1, window_w - safe_margin)
+        controller = self._get_card_viewport_controller()
+        if controller is None:
+            return max(1, int(self.root.winfo_width() or 0))
+        return controller._get_forced_card_area_width()
 
     def _apply_forced_games_canvas_width(self) -> int:
         return self._get_forced_card_area_width()
 
     def _get_dynamic_column_count(self) -> int:
-        usable_w = self._get_forced_card_area_width()
-        if usable_w <= 1:
-            return 1
-        return self._max_safe_columns_for_width(usable_w)
+        controller = self._get_card_viewport_controller()
+        if controller is None:
+            return max(1, int(getattr(self, "_grid_cols_current", GRID_COLS) or GRID_COLS))
+        return controller._get_dynamic_column_count()
 
     def _max_safe_columns_for_width(self, usable_w: int) -> int:
-        # Use measured card slot width so fullscreen/high-DPI wraps correctly.
-        card_unit_w = self._get_card_slot_width()
-        # Small right gutter prevents partial card visibility at boundary values.
-        safe_w = max(1, int(usable_w) - 6)
-        cols = max(1, safe_w // card_unit_w)
-        return cols
+        controller = self._get_card_viewport_controller()
+        if controller is None:
+            slot_width = max(1, CARD_W + CARD_H_SPACING)
+            return max(1, max(1, int(usable_w) - 6) // slot_width)
+        return controller._max_safe_columns_for_width(usable_w)
 
     def _get_card_slot_width(self) -> int:
-        fallback = max(1, CARD_W + CARD_H_SPACING)
-        if not self.card_frames:
-            return fallback
-
-        card = self.card_frames[0]
-        try:
-            card_w = max(int(card.winfo_width() or 0), int(card.winfo_reqwidth() or 0), CARD_W)
-            grid_info = card.grid_info()
-            padx = grid_info.get("padx", (CARD_H_SPACING // 2, CARD_H_SPACING // 2))
-
-            left = 0
-            right = 0
-            if isinstance(padx, (tuple, list)):
-                if len(padx) >= 2:
-                    left = int(padx[0])
-                    right = int(padx[1])
-                elif len(padx) == 1:
-                    left = right = int(padx[0])
-            elif isinstance(padx, str):
-                parts = [p for p in padx.replace("{", " ").replace("}", " ").split() if p]
-                if len(parts) >= 2:
-                    left = int(float(parts[0]))
-                    right = int(float(parts[1]))
-                elif len(parts) == 1:
-                    left = right = int(float(parts[0]))
-            else:
-                left = right = int(padx)
-
-            return max(1, card_w + left + right)
-        except Exception:
-            return fallback
+        controller = self._get_card_viewport_controller()
+        if controller is None:
+            return max(1, CARD_W + CARD_H_SPACING)
+        return controller._get_card_slot_width()
 
     def _capture_startup_width(self):
-        self._base_root_width = max(1, self.root.winfo_width())
-        self._last_reflow_width = self.root.winfo_width()
-        self._apply_forced_games_canvas_width()
-        self._schedule_overflow_fit_check()
-        if self.found_exe_list:
-            self._render_cards(keep_selection=True)
+        controller = self._get_card_viewport_controller()
+        if controller is None:
+            return
+        return controller.capture_startup_width()
 
     def _get_games_container_width(self) -> int:
-        try:
-            canvas = getattr(self.games_scroll, "_parent_canvas", None)
-            if canvas is not None:
-                return max(1, canvas.winfo_width())
-            return max(1, self.games_scroll.winfo_width())
-        except Exception:
-            return max(1, self.root.winfo_width())
+        controller = self._get_card_viewport_controller()
+        if controller is None:
+            return max(1, int(self.root.winfo_width() or 0))
+        return controller._get_games_container_width()
 
     def _schedule_reflow_for_resize(self):
-        # Trailing debounce only: avoid repeated re-layout while the user is dragging.
-        current_w = self.root.winfo_width()
-        self._resize_in_progress = True
-
-        decision = compute_card_resize_reflow_decision(
-            current_width=current_w,
-            last_reflow_width=self._last_reflow_width,
-            next_cols=self._get_dynamic_column_count(),
-            current_cols=self._grid_cols_current,
-        )
-        if decision.next_last_reflow_width is not None:
-            self._last_reflow_width = decision.next_last_reflow_width
-        if not decision.should_schedule_reflow:
-            if decision.clear_resize_in_progress:
-                self._resize_in_progress = False
-            if decision.should_schedule_overflow_check:
-                self._schedule_overflow_fit_check()
+        controller = self._get_card_viewport_controller()
+        if controller is None:
             return
-
-        if self._resize_after_id is not None:
-            self.root.after_cancel(self._resize_after_id)
-        self._resize_after_id = self.root.after(decision.delay_ms, self._finish_resize_reflow)
-
-        if self._resize_visual_after_id is not None:
-            self.root.after_cancel(self._resize_visual_after_id)
-        self._resize_visual_after_id = self.root.after(decision.visual_delay_ms, self._end_resize_visual_suppression)
+        return controller._schedule_reflow_for_resize()
 
     def _finish_resize_reflow(self):
-        self._resize_after_id = None
-        self._rerender_cards_for_resize()
+        controller = self._get_card_viewport_controller()
+        if controller is None:
+            return
+        return controller._finish_resize_reflow()
 
     def _end_resize_visual_suppression(self):
-        self._resize_visual_after_id = None
-        self._resize_in_progress = False
-        self._poster_queue.pump()
+        controller = self._get_card_viewport_controller()
+        if controller is None:
+            return
+        return controller._end_resize_visual_suppression()
 
     def _on_root_resize(self, _event=None):
-        self._schedule_reflow_for_resize()
+        controller = self._get_card_viewport_controller()
+        if controller is None:
+            return
+        return controller.on_root_resize(_event)
 
     def _configure_card_columns(self, cols: int):
-        max_cols = max(self._grid_cols_current, cols)
-        for col in range(max_cols):
-            self.games_scroll.grid_columnconfigure(col, weight=0, minsize=0)
-
-        for col in range(cols):
-            self.games_scroll.grid_columnconfigure(col, weight=0, minsize=CARD_W)
-        self._grid_cols_current = cols
+        controller = self._get_card_viewport_controller()
+        if controller is None:
+            normalized_cols = max(1, int(cols))
+            max_cols = max(int(getattr(self, "_grid_cols_current", GRID_COLS)), normalized_cols)
+            for col in range(max_cols):
+                self.games_scroll.grid_columnconfigure(col, weight=0, minsize=0)
+            for col in range(normalized_cols):
+                self.games_scroll.grid_columnconfigure(col, weight=0, minsize=CARD_W)
+            self._grid_cols_current = normalized_cols
+            return
+        return controller._configure_card_columns(cols)
 
     def _layout_existing_cards(self, cols: int):
-        self._configure_card_columns(cols)
-        for placement, card in zip(build_card_grid_placements(len(self.card_frames), cols), self.card_frames):
-            card.grid(
-                row=placement.row,
-                column=placement.column,
-                padx=(CARD_H_SPACING // 2, CARD_H_SPACING // 2),
-                pady=(CARD_V_SPACING // 2, CARD_V_SPACING // 2),
-                sticky="n",
-            )
+        controller = self._get_card_viewport_controller()
+        if controller is None:
+            return
+        return controller._layout_existing_cards(cols)
 
     def _cards_overflow_visible_width(self) -> bool:
-        if not self.card_frames:
+        controller = self._get_card_viewport_controller()
+        if controller is None:
             return False
-
-        canvas = getattr(self.games_scroll, "_parent_canvas", None)
-        if canvas is None:
-            return False
-
-        viewport_w = max(1, int(canvas.winfo_width() or 0))
-        max_right = 0
-        for card in self.card_frames:
-            try:
-                right = int(card.winfo_x() + card.winfo_width())
-                if right > max_right:
-                    max_right = right
-            except Exception:
-                continue
-        return max_right > viewport_w
+        return controller._cards_overflow_visible_width()
 
     def _schedule_games_scrollregion_refresh(self):
-        if self._games_scrollregion_after_id is not None:
+        controller = self._get_card_viewport_controller()
+        if controller is None:
             return
-        self._games_scrollregion_after_id = self.root.after_idle(self._refresh_games_scrollregion)
+        return controller._schedule_games_scrollregion_refresh()
 
     def _refresh_games_scrollregion(self):
-        self._games_scrollregion_after_id = None
-        try:
-            canvas = getattr(self.games_scroll, "_parent_canvas", None)
-            if canvas is not None:
-                bbox = canvas.bbox("all")
-                if bbox:
-                    canvas.configure(scrollregion=bbox)
-        except Exception:
-            pass
+        controller = self._get_card_viewport_controller()
+        if controller is None:
+            return
+        return controller._refresh_games_scrollregion()
 
     def _schedule_overflow_fit_check(self):
-        if self._overflow_fit_after_id is not None:
+        controller = self._get_card_viewport_controller()
+        if controller is None:
             return
-        try:
-            if not self.root.winfo_exists() or not self.games_scroll.winfo_exists():
-                return
-        except tk.TclError:
-            return
-        self._overflow_fit_after_id = self.root.after_idle(self._run_overflow_fit_check)
+        return controller._schedule_overflow_fit_check()
 
     def _run_overflow_fit_check(self):
-        self._overflow_fit_after_id = None
-        try:
-            if not self.root.winfo_exists() or not self.games_scroll.winfo_exists() or not self.card_frames:
-                return
-
-            canvas = getattr(self.games_scroll, "_parent_canvas", None)
-            viewport_w = int(canvas.winfo_width() or 0) if canvas is not None else 0
-            cols = max(1, int(self._grid_cols_current))
-            decision = compute_card_overflow_fit_decision(
-                viewport_width=viewport_w,
-                current_cols=cols,
-                max_cols=self._max_safe_columns_for_width(self._get_forced_card_area_width()),
-                overflow_detected=self._cards_overflow_visible_width(),
-            )
-            if decision.retry_delay_ms is not None:
-                self._overflow_fit_after_id = self.root.after(decision.retry_delay_ms, self._run_overflow_fit_check)
-                return
-
-            if decision.relayout_cols is not None:
-                self._layout_existing_cards(decision.relayout_cols)
-                self._schedule_games_scrollregion_refresh()
-                if decision.should_reschedule_check:
-                    self._schedule_overflow_fit_check()
-        except tk.TclError:
-            logging.debug("Skipped overflow fit check because widgets are no longer available")
+        controller = self._get_card_viewport_controller()
+        if controller is None:
+            return
+        return controller._run_overflow_fit_check()
 
     def _fit_cards_to_visible_width(self, preferred_cols: int | None = None):
-        if not self.card_frames:
-            if preferred_cols is not None:
-                self._configure_card_columns(max(1, preferred_cols))
+        controller = self._get_card_viewport_controller()
+        if controller is None:
             return
-
-        requested_cols = max(1, preferred_cols if preferred_cols is not None else self._grid_cols_current)
-        max_cols = self._max_safe_columns_for_width(self._get_forced_card_area_width())
-        cols = clamp_grid_columns(requested_cols, max_cols)
-        self._layout_existing_cards(cols)
-        self._schedule_games_scrollregion_refresh()
-        self._schedule_overflow_fit_check()
+        return controller.fit_cards_to_visible_width(preferred_cols)
 
     def _on_games_area_resize(self, _event=None):
-        self._schedule_reflow_for_resize()
-        self._schedule_overflow_fit_check()
-        if not self._resize_in_progress:
-            self._poster_queue.pump()
+        controller = self._get_card_viewport_controller()
+        if controller is None:
+            return
+        return controller.on_games_area_resize(_event)
 
     def _schedule_games_viewport_update(self, delay_ms: int = 30):
-        try:
-            if self._games_viewport_after_id is not None:
-                self.root.after_cancel(self._games_viewport_after_id)
-            self._games_viewport_after_id = self.root.after(max(0, int(delay_ms)), self._run_games_viewport_update)
-        except Exception:
-            self._games_viewport_after_id = None
+        controller = self._get_card_viewport_controller()
+        if controller is None:
+            return
+        return controller._schedule_games_viewport_update(delay_ms)
 
     def _run_games_viewport_update(self):
-        self._games_viewport_after_id = None
-        self._poster_queue.pump()
+        controller = self._get_card_viewport_controller()
+        if controller is None:
+            return
+        return controller._run_games_viewport_update()
 
     def _on_games_scrollbar_command(self, *args):
-        canvas = getattr(self.games_scroll, "_parent_canvas", None)
-        if canvas is None or not args:
+        controller = self._get_card_viewport_controller()
+        if controller is None:
             return
-
-        try:
-            canvas.yview(*args)
-        except Exception:
-            return
-
-        self._schedule_games_viewport_update()
+        return controller.on_games_scrollbar_command(*args)
 
     def _on_games_scroll(self, _event=None):
-        # Handle wheel scrolling explicitly so rows beyond 2 are reachable.
-        event = _event
-        canvas = getattr(self.games_scroll, "_parent_canvas", None)
-        if canvas is not None and event is not None:
-            step = 0
-            if hasattr(event, "delta") and event.delta:
-                step = -1 if event.delta > 0 else 1
-            elif getattr(event, "num", None) == 4:
-                step = -1
-            elif getattr(event, "num", None) == 5:
-                step = 1
-
-            if step != 0:
-                canvas.yview_scroll(step, "units")
-
-        # Re-evaluate queue ordering when viewport changes.
-        self._schedule_games_viewport_update()
+        controller = self._get_card_viewport_controller()
+        if controller is None:
+            return
+        return controller.on_games_scroll(_event)
 
     def _rerender_cards_for_resize(self):
-        self._resize_after_id = None
-        cols = self._get_dynamic_column_count()
-        self._fit_cards_to_visible_width(cols)
+        controller = self._get_card_viewport_controller()
+        if controller is None:
+            return
+        return controller._rerender_cards_for_resize()
 
     def _build_card_visual_theme(self) -> GameCardVisualTheme:
         return GameCardVisualTheme(
@@ -1784,11 +1484,12 @@ class OptiManagerApp:
         if index < 0 or index >= len(self.card_items):
             return
 
+        card_ui_state = self.card_ui_state
         item = self.card_items[index]
         render_game_card_visual(
             item,
-            selected=self.selected_game_index == index,
-            hovered=self._hovered_card_index == index,
+            selected=card_ui_state.selected_game_index == index,
+            hovered=card_ui_state.hovered_card_index == index,
             theme=self._build_card_visual_theme(),
             image_refs=self._ctk_images,
         )
@@ -1810,15 +1511,16 @@ class OptiManagerApp:
         self._refresh_card_visual(index)
 
     def _handle_card_hover_enter(self, index: int) -> None:
-        prev = self._hovered_card_index
-        self._hovered_card_index = int(index)
+        card_ui_state = self.card_ui_state
+        prev = card_ui_state.hovered_card_index
+        card_ui_state.hovered_card_index = int(index)
         if prev is not None and prev != index:
             self._refresh_card_visual(prev)
         self._refresh_card_visual(index)
 
     def _handle_card_hover_leave(self, index: int) -> None:
-        if self._hovered_card_index == index:
-            self._hovered_card_index = None
+        if self.card_ui_state.hovered_card_index == index:
+            self.card_ui_state.hovered_card_index = None
         self._refresh_card_visual(index)
 
     def _render_cards(self, keep_selection=False):
@@ -1829,7 +1531,7 @@ class OptiManagerApp:
             tuple(self.found_exe_list),
             cols=self._get_dynamic_column_count(),
             keep_selection=bool(keep_selection),
-            previous_selected_index=self.selected_game_index if keep_selection else None,
+            previous_selected_index=self.card_ui_state.selected_game_index if keep_selection else None,
         )
 
     def _make_card(self, index: int, game: dict) -> ctk.CTkFrame:
@@ -1900,45 +1602,25 @@ class OptiManagerApp:
         controller.select_game(index, tuple(self.found_exe_list))
 
     def _run_install_precheck(self, game_data: dict) -> InstallSelectionPrecheckOutcome:
-        logger = get_prefixed_logger(str(game_data.get("game_name", "unknown")).strip() or "unknown")
-        handler = get_game_handler(game_data)
-        try:
-            logger.info("Running install precheck with handler: %s", getattr(handler, "handler_key", "default"))
-            precheck = handler.run_install_precheck(game_data, self.lang == "ko", logger)
-            notice_message = handler.format_precheck_notice(precheck, False)
-            if notice_message:
-                logger.info("Install precheck notice: %s", notice_message)
-            if precheck.ok:
-                resolved_dll_name = str(precheck.resolved_dll_name or "")
-                logger.info("Install precheck resolved DLL name: %s", resolved_dll_name)
-                return InstallSelectionPrecheckOutcome(
-                    ok=True,
-                    resolved_dll_name=resolved_dll_name,
-                )
-            formatted_error = handler.format_precheck_error(precheck, self.lang == "ko")
-            popup_message = handler.get_precheck_popup_message(precheck, self.lang == "ko")
-            logger.warning("Install precheck failed: %s", precheck.raw_error_message)
+        controller = self._get_install_flow_controller()
+        if controller is None:
             return InstallSelectionPrecheckOutcome(
                 ok=False,
-                error=formatted_error,
-                popup_message=popup_message,
+                error="Install flow controller is not available",
             )
-        except Exception as exc:
-            logger.exception("Install precheck failed unexpectedly: %s", exc)
-            return InstallSelectionPrecheckOutcome(
-                ok=False,
-                error=str(exc),
-            )
+        return controller.run_install_precheck(game_data)
 
     # ------------------------------------------------------------------
     # File dialogs
     # ------------------------------------------------------------------
 
     def _build_scan_entry_state(self) -> ScanEntryState:
+        gpu_state = self.gpu_state
+        sheet_state = self.sheet_state
         return ScanEntryState(
-            multi_gpu_blocked=bool(self.multi_gpu_blocked),
-            sheet_loading=bool(self.sheet_loading),
-            sheet_ready=bool(self.sheet_status),
+            multi_gpu_blocked=bool(gpu_state.multi_gpu_blocked),
+            sheet_loading=bool(sheet_state.loading),
+            sheet_ready=bool(sheet_state.status),
         )
 
     def select_game_folder(self):
@@ -1964,151 +1646,40 @@ class OptiManagerApp:
     # ------------------------------------------------------------------
 
     def _build_install_entry_state(self) -> InstallEntryState:
-        selection = build_selected_game_snapshot(
-            self.found_exe_list,
-            self.selected_game_index,
-            getattr(self, "lang", "en"),
-        )
-        return build_install_entry_state(
-            selection=selection,
-            multi_gpu_blocked=bool(self.multi_gpu_blocked),
-            install_in_progress=bool(self.install_in_progress),
-            optiscaler_archive_downloading=bool(self.optiscaler_archive_downloading),
-            install_precheck_running=bool(self.install_precheck_running),
-            install_precheck_ok=bool(self.install_precheck_ok),
-            install_precheck_error=str(self.install_precheck_error or ""),
-            install_precheck_dll_name=str(self.install_precheck_dll_name or ""),
-            optiscaler_archive_ready=bool(self.optiscaler_archive_ready),
-            opti_source_archive=str(getattr(self, "opti_source_archive", "") or ""),
-            optiscaler_archive_error=str(self.optiscaler_archive_error or ""),
-            fsr4_archive_downloading=bool(self.fsr4_archive_downloading),
-            fsr4_archive_ready=bool(self.fsr4_archive_ready),
-            fsr4_source_archive=str(getattr(self, "fsr4_source_archive", "") or ""),
-            fsr4_archive_error=str(self.fsr4_archive_error or ""),
-            game_popup_confirmed=bool(getattr(self, "_game_popup_confirmed", True)),
-        )
+        controller = self._get_install_flow_controller()
+        if controller is None:
+            raise RuntimeError("Install flow controller is not available")
+        return controller.build_install_entry_state()
 
     def _show_install_entry_rejection(self, decision: InstallEntryDecision) -> None:
-        if decision.code in {"multi_gpu_blocked", "install_precheck_running"}:
+        controller = self._get_install_flow_controller()
+        if controller is None:
             return
-
-        if decision.code == "install_in_progress":
-            messagebox.showinfo(self.txt.dialogs.installing_title, self.txt.dialogs.installing_body)
-            return
-
-        if decision.code == "no_game_selected":
-            messagebox.showwarning(self.txt.common.warning, self.txt.dialogs.select_game_card_body)
-            return
-
-        if decision.code == "optiscaler_archive_downloading":
-            messagebox.showinfo(self.txt.dialogs.preparing_archive_title, self.txt.dialogs.preparing_archive_body)
-            return
-
-        if decision.code == "precheck_incomplete":
-            detail = decision.detail or self.txt.dialogs.precheck_incomplete_body
-            detail = f"{detail}\n\n{self.txt.dialogs.precheck_retry_mods_body}"
-            messagebox.showwarning(self.txt.common.warning, detail)
-            return
-
-        if decision.code == "optiscaler_archive_not_ready":
-            detail = decision.detail or self.txt.dialogs.optiscaler_archive_not_ready
-            messagebox.showwarning(self.txt.common.warning, detail)
-            return
-
-        if decision.code == "invalid_game_selection":
-            messagebox.showwarning(self.txt.common.warning, self.txt.dialogs.invalid_game_body)
-            return
-
-        if decision.code == "fsr4_archive_downloading":
-            messagebox.showinfo(self.txt.dialogs.preparing_download_title, self.txt.dialogs.preparing_download_body)
-            return
-
-        if decision.code == "fsr4_not_ready":
-            detail = decision.detail or self.txt.dialogs.fsr4_not_ready
-            messagebox.showwarning(self.txt.common.warning, detail)
-            return
-
-        if decision.code == "confirm_popup_required":
-            messagebox.showwarning(self.txt.common.notice, self.txt.dialogs.confirm_popup_body)
-            return
+        return controller.show_install_entry_rejection(decision)
 
     def apply_optiscaler(self):
-        decision = validate_install_entry(
-            self._build_install_entry_state(),
-            self._should_apply_fsr4_for_game,
-        )
-        if not decision.ok:
-            self._show_install_entry_rejection(decision)
+        controller = self._get_install_flow_controller()
+        if controller is None:
             return
+        return controller.apply_selected_install()
 
-        game_data = dict(decision.selected_game or {})
-        source_archive = decision.source_archive
-        resolved_dll_name = decision.resolved_dll_name
-        fsr4_source_archive = decision.fsr4_source_archive
-
-        self.install_in_progress = True
-        self.apply_btn.configure(
-            state="disabled",
-            text=self.txt.main.installing_button,
-            fg_color=_INSTALL_BUTTON_DISABLED,
-            hover_color=_INSTALL_BUTTON_DISABLED,
-            border_color=_INSTALL_BUTTON_BORDER_DISABLED,
-        )
-
-        self._task_executor.submit(
-            self._apply_optiscaler_worker,
+    def _apply_optiscaler_worker(self, game_data, source_archive, resolved_dll_name, fsr4_source_archive, fsr4_required):
+        controller = self._get_install_flow_controller()
+        if controller is None:
+            return
+        return controller.run_install_worker(
             game_data,
             source_archive,
             resolved_dll_name,
             fsr4_source_archive,
-            decision.fsr4_required,
+            fsr4_required,
         )
 
-    def _apply_optiscaler_worker(self, game_data, source_archive, resolved_dll_name, fsr4_source_archive, fsr4_required):
-        game_name = str(game_data.get("game_name", "unknown")).strip() or "unknown"
-        logger = get_prefixed_logger(game_name)
-        try:
-            install_ctx = build_install_context(
-                self,
-                game_data,
-                source_archive,
-                resolved_dll_name,
-                fsr4_source_archive,
-                fsr4_required,
-                logger,
-            )
-            installed_game = run_install_workflow(
-                self,
-                install_ctx,
-                self.module_download_links,
-                OPTIPATCHER_URL,
-                self.gpu_info,
-                create_install_workflow_callbacks(),
-                logger,
-            )
-            self.root.after(
-                0,
-                lambda game=dict(installed_game): self._on_install_finished(True, "Install Completed", game),
-            )
-        except Exception as e:
-            logger.exception("Install failed: %s", e)
-            self.root.after(
-                0,
-                lambda err=e, game=dict(game_data): self._on_install_finished(False, str(err), game),
-            )
-
     def _on_install_finished(self, success, message, installed_game=None):
-        self.install_in_progress = False
-        self._update_install_button_state()
-
-        if success:
-            game = installed_game if isinstance(installed_game, dict) else {}
-            self.root.after_idle(lambda g=dict(game): self._show_after_install_popup(g))
-        else:
-            messagebox.showerror(
-                self.txt.common.error,
-                self.txt.dialogs.install_failed_body_template.format(message=message),
-            )
+        controller = self._get_install_flow_controller()
+        if controller is None:
+            return
+        return controller.on_install_finished(success, message, installed_game)
 
 
 if __name__ == "__main__":
