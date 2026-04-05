@@ -308,7 +308,7 @@ def _build_scan_controller(app: Any, scan_feedback: ScanFeedbackController) -> S
             show_manual_scan_empty_popup=scan_feedback.show_manual_scan_empty_popup,
             show_select_game_hint=scan_feedback.show_select_game_hint,
         ),
-        get_game_db=lambda: app.game_db,
+        get_game_db=lambda: app.sheet_state.game_db,
         get_lang=lambda: app.lang,
         is_game_supported=app._is_game_supported_for_current_gpu,
         logger=logging.getLogger(),

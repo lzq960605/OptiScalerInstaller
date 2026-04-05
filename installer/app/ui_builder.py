@@ -63,7 +63,7 @@ def _build_header(app: Any, theme: MainUiTheme) -> None:
 
     app.gpu_lbl = ctk.CTkLabel(
         sub_frame,
-        text=app._format_gpu_label_text(app.gpu_info),
+        text=app._format_gpu_label_text(app.gpu_state.gpu_info),
         font=ctk.CTkFont(family=theme.font_ui, size=11),
         text_color="#C5CFDB",
         anchor="w",
