@@ -1056,7 +1056,7 @@ class OptiManagerApp:
         controller = getattr(self, "_card_ui_controller", None)
         if controller is None:
             return
-        return controller.apply_loaded_poster(index, label, pil_img)
+        return controller.set_card_base_image(index, label, pil_img)
 
     def _set_selected_game(self, index: int):
         controller = getattr(self, "_install_selection_controller", None)

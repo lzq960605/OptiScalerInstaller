@@ -108,11 +108,9 @@ class StartupFlowController:
         if self._post_sheet_startup_done:
             return
 
-        if self._is_multi_gpu_blocked():
-            self._post_sheet_startup_done = True
-            return
-
         self._post_sheet_startup_done = True
+        if self._is_multi_gpu_blocked():
+            return
         self._startup_popup_queue.clear()
         self._startup_popup_active = False
 

@@ -54,7 +54,7 @@ class CardRenderController:
             self._callbacks.restore_selection(selected_index, normalized_games[selected_index])
 
         if not normalized_games:
-            self._callbacks.hide_empty_label()
+            pass
 
         self._callbacks.schedule_scrollregion_refresh()
         self._callbacks.pump_poster_queue()

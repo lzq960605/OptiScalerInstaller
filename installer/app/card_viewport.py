@@ -61,7 +61,6 @@ class CardViewportController:
     def capture_startup_width(self) -> None:
         self._runtime.base_root_width = max(1, int(self._root.winfo_width() or 0))
         self._runtime.last_reflow_width = max(1, int(self._root.winfo_width() or 0))
-        self._get_forced_card_area_width()
         self._publish_runtime_state()
         self._schedule_overflow_fit_check()
         if self._callbacks.has_found_games():
@@ -190,15 +189,6 @@ class CardViewportController:
             return max(1, card_w + left + right)
         except Exception:
             return fallback
-
-    def _get_games_container_width(self) -> int:
-        try:
-            canvas = getattr(self._games_scroll, "_parent_canvas", None)
-            if canvas is not None:
-                return max(1, int(canvas.winfo_width() or 0))
-            return max(1, int(self._games_scroll.winfo_width() or 0))
-        except Exception:
-            return max(1, int(self._root.winfo_width() or 0))
 
     def _configure_card_columns(self, cols: int) -> None:
         normalized_cols = max(1, int(cols))

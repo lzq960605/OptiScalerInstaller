@@ -22,20 +22,18 @@ def ensure_game_card_image_cache(
     image_refs: list[Any],
 ) -> None:
     base_revision = int(item.get("base_revision", 0))
-    if item.get("ctk_img_cache_revision") == base_revision and item.get("ctk_img_cache"):
+    if item.get("ctk_img_cache_revision") == base_revision and item.get("ctk_img"):
         return
 
     base_pil = item["base_pil"]
     normal_img = base_pil.convert("RGBA")
-    ctk_cache = {
-        "normal": ctk.CTkImage(
-            light_image=normal_img,
-            dark_image=normal_img,
-            size=(int(theme.card_width), int(theme.card_height)),
-        ),
-    }
-    image_refs.extend(ctk_cache.values())
-    item["ctk_img_cache"] = ctk_cache
+    ctk_img = ctk.CTkImage(
+        light_image=normal_img,
+        dark_image=normal_img,
+        size=(int(theme.card_width), int(theme.card_height)),
+    )
+    image_refs.append(ctk_img)
+    item["ctk_img"] = ctk_img
     item["ctk_img_cache_revision"] = base_revision
     item["current_image_state"] = None
 
@@ -64,7 +62,7 @@ def render_game_card_visual(
     if item.get("current_image_state") == "normal":
         return
 
-    item["img_label"].configure(image=item["ctk_img_cache"]["normal"])
+    item["img_label"].configure(image=item["ctk_img"])
     item["current_image_state"] = "normal"
 
 
@@ -79,7 +77,7 @@ def update_game_card_base_image(
 
     item["base_pil"] = pil_img.convert("RGBA")
     item["base_revision"] = int(item.get("base_revision", 0)) + 1
-    item["ctk_img_cache"] = {}
+    item["ctk_img"] = None
     item["ctk_img_cache_revision"] = -1
     item["current_image_state"] = None
     return True

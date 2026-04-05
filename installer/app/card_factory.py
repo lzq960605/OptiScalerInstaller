@@ -110,7 +110,7 @@ def create_game_card(
             "hover_title": hover_title,
             "base_pil": make_placeholder_image(),
             "base_revision": 0,
-            "ctk_img_cache": {},
+            "ctk_img": None,
             "ctk_img_cache_revision": -1,
             "current_image_state": None,
         },

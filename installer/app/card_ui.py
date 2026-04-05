@@ -212,9 +212,6 @@ class GameCardUiController:
             yview_end=yview_end,
         )
 
-    def apply_loaded_poster(self, index: int, label: Any, pil_img: Any) -> None:
-        self.set_card_base_image(index, label, pil_img)
-
     def _queue_poster(
         self,
         index: int,
