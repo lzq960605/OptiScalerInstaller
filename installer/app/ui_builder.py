@@ -205,20 +205,6 @@ def _build_grid_area(app: Any, theme: MainUiTheme) -> None:
     )
     app.games_scroll.grid(row=1, column=0, sticky="nsew", padx=0, pady=(0, 8))
     app._configure_card_columns(app._grid_cols_current)
-    app.games_scroll.bind("<Configure>", app._on_games_area_resize)
-    try:
-        canvas = getattr(app.games_scroll, "_parent_canvas", None)
-        scrollbar = getattr(app.games_scroll, "_scrollbar", None)
-        if canvas is not None:
-            canvas.bind("<MouseWheel>", app._on_games_scroll, add="+")
-            canvas.bind("<Button-4>", app._on_games_scroll, add="+")
-            canvas.bind("<Button-5>", app._on_games_scroll, add="+")
-            canvas.bind("<ButtonRelease-1>", app._on_games_scroll, add="+")
-            canvas.bind("<Configure>", app._on_games_area_resize, add="+")
-        if canvas is not None and scrollbar is not None:
-            scrollbar.configure(command=app._on_games_scrollbar_command)
-    except Exception:
-        logging.debug("Failed to bind scroll events for image priority updates")
 
     app.empty_label = ctk.CTkLabel(
         app.games_scroll,

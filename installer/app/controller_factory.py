@@ -369,16 +369,17 @@ def _build_install_selection_controller(app: Any, install_flow: InstallFlowContr
 
 
 def _build_card_render_controller(app: Any, config: AppControllerFactoryConfig) -> CardRenderController:
+    viewport = app._card_viewport_controller
     return CardRenderController(
         callbacks=CardRenderCallbacks(
             append_found_game=app._append_found_game,
             clear_cards=app._clear_cards,
             hide_empty_label=app._hide_empty_label,
-            configure_card_columns=app._configure_card_columns,
+            configure_card_columns=viewport._configure_card_columns,
             create_and_place_card=app._create_and_place_card,
-            fit_cards_to_visible_width=app._fit_cards_to_visible_width,
+            fit_cards_to_visible_width=viewport.fit_cards_to_visible_width,
             restore_selection=app._restore_rendered_selection,
-            schedule_scrollregion_refresh=app._schedule_games_scrollregion_refresh,
+            schedule_scrollregion_refresh=viewport._schedule_games_scrollregion_refresh,
             pump_poster_queue=app._pump_poster_queue,
         )
     )

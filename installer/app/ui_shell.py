@@ -28,6 +28,12 @@ class AppUiShell:
         get_header_presenter: Callable[[], HeaderStatusPresenter | None],
         get_bottom_presenter: Callable[[], BottomPanelPresenter | None],
         callbacks: AppUiShellCallbacks,
+        get_lbl_scan_status: Callable[[], Any] | None = None,
+        get_status_badge_label: Callable[[], Any] | None = None,
+        get_status_badge_dot: Callable[[], Any] | None = None,
+        get_lbl_selected_game_header: Callable[[], Any] | None = None,
+        get_lbl_optiscaler_version_line: Callable[[], Any] | None = None,
+        get_info_text: Callable[[], Any] | None = None,
         scan_status_text_color: str,
         status_indicator_offline_color: str,
         status_indicator_warning_color: str,
@@ -40,6 +46,12 @@ class AppUiShell:
         self._get_header_presenter = get_header_presenter
         self._get_bottom_presenter = get_bottom_presenter
         self._callbacks = callbacks
+        self._get_lbl_scan_status = get_lbl_scan_status or (lambda: None)
+        self._get_status_badge_label = get_status_badge_label or (lambda: None)
+        self._get_status_badge_dot = get_status_badge_dot or (lambda: None)
+        self._get_lbl_selected_game_header = get_lbl_selected_game_header or (lambda: None)
+        self._get_lbl_optiscaler_version_line = get_lbl_optiscaler_version_line or (lambda: None)
+        self._get_info_text = get_info_text or (lambda: None)
         self._scan_status_text_color = str(scan_status_text_color or "")
         self._status_indicator_offline_color = str(status_indicator_offline_color or "")
         self._status_indicator_warning_color = str(status_indicator_warning_color or "")
@@ -79,7 +91,8 @@ class AppUiShell:
             return False
         return bool(controller.open_supported_games_wiki())
 
-    def set_scan_status_message(self, label_widget: Any, text: str = "", text_color: str | None = None) -> None:
+    def set_scan_status_message(self, text: str = "", text_color: str | None = None) -> None:
+        label_widget = self._get_lbl_scan_status()
         presenter = self._get_header_presenter()
         if presenter is None:
             return
@@ -91,12 +104,12 @@ class AppUiShell:
 
     def set_status_badge_state(
         self,
-        label_widget: Any,
-        dot_widget: Any,
         label_text: str,
         indicator_color: str,
         pulse: bool = False,
     ) -> None:
+        label_widget = self._get_status_badge_label()
+        dot_widget = self._get_status_badge_dot()
         presenter = self._get_header_presenter()
         if presenter is None:
             return
@@ -116,7 +129,8 @@ class AppUiShell:
         )
         return selection.header_text
 
-    def update_selected_game_header(self, label_widget: Any) -> None:
+    def update_selected_game_header(self) -> None:
+        label_widget = self._get_lbl_selected_game_header()
         presenter = self._get_header_presenter()
         if presenter is None:
             return
@@ -135,11 +149,11 @@ class AppUiShell:
 
     def refresh_optiscaler_archive_info_ui(
         self,
-        version_label: Any,
         *,
         sheet_loading: bool,
         module_download_links: dict[str, Any],
     ) -> None:
+        version_label = self._get_lbl_optiscaler_version_line()
         presenter = self._get_bottom_presenter()
         if presenter is None:
             return
@@ -150,7 +164,8 @@ class AppUiShell:
             version_line_template=self._txt.main.version_line_template,
         )
 
-    def apply_information_text_shift(self, info_text_widget: Any) -> None:
+    def apply_information_text_shift(self) -> None:
+        info_text_widget = self._get_info_text()
         presenter = self._get_bottom_presenter()
         if presenter is None:
             return
@@ -159,13 +174,13 @@ class AppUiShell:
     def update_sheet_status(
         self,
         *,
-        label_widget: Any,
-        dot_widget: Any,
         multi_gpu_blocked: bool,
         gpu_selection_pending: bool,
         sheet_loading: bool,
         sheet_status: bool,
     ) -> None:
+        label_widget = self._get_status_badge_label()
+        dot_widget = self._get_status_badge_dot()
         presenter = self._get_header_presenter()
         if presenter is None:
             return
@@ -185,7 +200,8 @@ class AppUiShell:
             indicator_online=self._status_indicator_online_color,
         )
 
-    def set_information_text(self, info_text_widget: Any, *, text: str = "") -> None:
+    def set_information_text(self, *, text: str = "") -> None:
+        info_text_widget = self._get_info_text()
         presenter = self._get_bottom_presenter()
         if presenter is None:
             return
@@ -215,6 +231,12 @@ def create_ui_shell(
             get_selected_game_index=lambda: getattr(getattr(app, "card_ui_state", None), "selected_game_index", None),
             get_lang=lambda: str(getattr(app, "lang", "en") or "en"),
         ),
+        get_lbl_scan_status=lambda: getattr(app, "lbl_scan_status", None),
+        get_status_badge_label=lambda: getattr(app, "status_badge_label", None),
+        get_status_badge_dot=lambda: getattr(app, "status_badge_dot", None),
+        get_lbl_selected_game_header=lambda: getattr(app, "lbl_selected_game_header", None),
+        get_lbl_optiscaler_version_line=lambda: getattr(app, "lbl_optiscaler_version_line", None),
+        get_info_text=lambda: getattr(app, "info_text", None),
         scan_status_text_color=scan_status_text_color,
         status_indicator_offline_color=status_indicator_offline_color,
         status_indicator_warning_color=status_indicator_warning_color,

@@ -546,23 +546,41 @@ class OptiManagerApp:
         self.setup_ui()
         ui_controllers = build_ui_controllers(self, UI_CONTROLLER_FACTORY_CONFIG)
         bind_ui_controllers(self, ui_controllers)
+        self._bind_viewport_scroll_events()
         self._sync_card_viewport_runtime_to_app()
         self._app_controllers = build_app_controllers(self, APP_CONTROLLER_FACTORY_CONFIG)
         bind_app_controllers(self, self._app_controllers)
         self._create_ui_shell()
         self._create_startup_runtime_coordinator()
 
+    def _bind_viewport_scroll_events(self) -> None:
+        c = self._card_viewport_controller
+        self.games_scroll.bind("<Configure>", c.on_games_area_resize)
+        try:
+            canvas = getattr(self.games_scroll, "_parent_canvas", None)
+            scrollbar = getattr(self.games_scroll, "_scrollbar", None)
+            if canvas is not None:
+                canvas.bind("<MouseWheel>", c.on_games_scroll, add="+")
+                canvas.bind("<Button-4>", c.on_games_scroll, add="+")
+                canvas.bind("<Button-5>", c.on_games_scroll, add="+")
+                canvas.bind("<ButtonRelease-1>", c.on_games_scroll, add="+")
+                canvas.bind("<Configure>", c.on_games_area_resize, add="+")
+            if canvas is not None and scrollbar is not None:
+                scrollbar.configure(command=c.on_games_scrollbar_command)
+        except Exception:
+            logging.exception("Failed to bind viewport scroll events to controller")
+
     def _start_background_services(self) -> None:
         if self._gpu_flow_controller is not None:
             self._gpu_flow_controller.start_detection()
 
     def _bind_root_events(self) -> None:
-        self.root.bind("<Configure>", self._on_root_resize)
+        self.root.bind("<Configure>", self._card_viewport_controller.on_root_resize)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         if self._startup_window_workaround_active:
             self.root.after_idle(self._apply_startup_window_workaround)
             self.root.after(220, self._apply_startup_window_workaround)
-        self.root.after(250, self._capture_startup_width)
+        self.root.after(250, self._card_viewport_controller.capture_startup_width)
 
     def _apply_startup_window_workaround(self):
         apply_startup_window_workaround(
@@ -636,23 +654,13 @@ class OptiManagerApp:
         shell = self._get_ui_shell()
         if shell is None:
             return
-        shell.set_scan_status_message(
-            getattr(self, "lbl_scan_status", None),
-            text,
-            text_color,
-        )
+        shell.set_scan_status_message(text, text_color)
 
     def _set_status_badge_state(self, label_text: str, indicator_color: str, pulse: bool = False):
         shell = self._get_ui_shell()
         if shell is None:
             return
-        shell.set_status_badge_state(
-            getattr(self, "status_badge_label", None),
-            getattr(self, "status_badge_dot", None),
-            label_text=label_text,
-            indicator_color=indicator_color,
-            pulse=pulse,
-        )
+        shell.set_status_badge_state(label_text=label_text, indicator_color=indicator_color, pulse=pulse)
 
     def _get_selected_game_header_text(self) -> str:
         shell = self._get_ui_shell()
@@ -669,7 +677,7 @@ class OptiManagerApp:
         shell = self._get_ui_shell()
         if shell is None:
             return
-        shell.update_selected_game_header(getattr(self, "lbl_selected_game_header", None))
+        shell.update_selected_game_header()
 
     def _show_after_install_popup(self, game: dict):
         shell = self._get_ui_shell()
@@ -974,7 +982,6 @@ class OptiManagerApp:
         if shell is None:
             return
         shell.refresh_optiscaler_archive_info_ui(
-            getattr(self, "lbl_optiscaler_version_line", None),
             sheet_loading=bool(self.sheet_state.loading),
             module_download_links=self.sheet_state.module_download_links,
         )
@@ -983,7 +990,7 @@ class OptiManagerApp:
         shell = self._get_ui_shell()
         if shell is None:
             return
-        shell.apply_information_text_shift(getattr(self, "info_text", None))
+        shell.apply_information_text_shift()
 
     # ------------------------------------------------------------------
     # Status indicator
@@ -996,8 +1003,6 @@ class OptiManagerApp:
         gpu_state = self.gpu_state
         sheet_state = self.sheet_state
         shell.update_sheet_status(
-            label_widget=getattr(self, "status_badge_label", None),
-            dot_widget=getattr(self, "status_badge_dot", None),
             multi_gpu_blocked=gpu_state.multi_gpu_blocked,
             gpu_selection_pending=gpu_state.gpu_selection_pending,
             sheet_loading=sheet_state.loading,
@@ -1012,10 +1017,7 @@ class OptiManagerApp:
         shell = self._get_ui_shell()
         if shell is None:
             return
-        shell.set_information_text(
-            getattr(self, "info_text", None),
-            text=text,
-        )
+        shell.set_information_text(text=text)
 
     # ------------------------------------------------------------------
     # Poster card grid
@@ -1104,9 +1106,6 @@ class OptiManagerApp:
             return max(1, int(self.root.winfo_width() or 0))
         return controller._get_forced_card_area_width()
 
-    def _apply_forced_games_canvas_width(self) -> int:
-        return self._get_forced_card_area_width()
-
     def _get_dynamic_column_count(self) -> int:
         controller = self._get_card_viewport_controller()
         if controller is None:
@@ -1119,48 +1118,6 @@ class OptiManagerApp:
             slot_width = max(1, CARD_W + CARD_H_SPACING)
             return max(1, max(1, int(usable_w) - 6) // slot_width)
         return controller._max_safe_columns_for_width(usable_w)
-
-    def _get_card_slot_width(self) -> int:
-        controller = self._get_card_viewport_controller()
-        if controller is None:
-            return max(1, CARD_W + CARD_H_SPACING)
-        return controller._get_card_slot_width()
-
-    def _capture_startup_width(self):
-        controller = self._get_card_viewport_controller()
-        if controller is None:
-            return
-        return controller.capture_startup_width()
-
-    def _get_games_container_width(self) -> int:
-        controller = self._get_card_viewport_controller()
-        if controller is None:
-            return max(1, int(self.root.winfo_width() or 0))
-        return controller._get_games_container_width()
-
-    def _schedule_reflow_for_resize(self):
-        controller = self._get_card_viewport_controller()
-        if controller is None:
-            return
-        return controller._schedule_reflow_for_resize()
-
-    def _finish_resize_reflow(self):
-        controller = self._get_card_viewport_controller()
-        if controller is None:
-            return
-        return controller._finish_resize_reflow()
-
-    def _end_resize_visual_suppression(self):
-        controller = self._get_card_viewport_controller()
-        if controller is None:
-            return
-        return controller._end_resize_visual_suppression()
-
-    def _on_root_resize(self, _event=None):
-        controller = self._get_card_viewport_controller()
-        if controller is None:
-            return
-        return controller.on_root_resize(_event)
 
     def _configure_card_columns(self, cols: int):
         controller = self._get_card_viewport_controller()
@@ -1175,83 +1132,11 @@ class OptiManagerApp:
             return
         return controller._configure_card_columns(cols)
 
-    def _layout_existing_cards(self, cols: int):
-        controller = self._get_card_viewport_controller()
-        if controller is None:
-            return
-        return controller._layout_existing_cards(cols)
-
-    def _cards_overflow_visible_width(self) -> bool:
-        controller = self._get_card_viewport_controller()
-        if controller is None:
-            return False
-        return controller._cards_overflow_visible_width()
-
-    def _schedule_games_scrollregion_refresh(self):
-        controller = self._get_card_viewport_controller()
-        if controller is None:
-            return
-        return controller._schedule_games_scrollregion_refresh()
-
     def _refresh_games_scrollregion(self):
         controller = self._get_card_viewport_controller()
         if controller is None:
             return
         return controller._refresh_games_scrollregion()
-
-    def _schedule_overflow_fit_check(self):
-        controller = self._get_card_viewport_controller()
-        if controller is None:
-            return
-        return controller._schedule_overflow_fit_check()
-
-    def _run_overflow_fit_check(self):
-        controller = self._get_card_viewport_controller()
-        if controller is None:
-            return
-        return controller._run_overflow_fit_check()
-
-    def _fit_cards_to_visible_width(self, preferred_cols: int | None = None):
-        controller = self._get_card_viewport_controller()
-        if controller is None:
-            return
-        return controller.fit_cards_to_visible_width(preferred_cols)
-
-    def _on_games_area_resize(self, _event=None):
-        controller = self._get_card_viewport_controller()
-        if controller is None:
-            return
-        return controller.on_games_area_resize(_event)
-
-    def _schedule_games_viewport_update(self, delay_ms: int = 30):
-        controller = self._get_card_viewport_controller()
-        if controller is None:
-            return
-        return controller._schedule_games_viewport_update(delay_ms)
-
-    def _run_games_viewport_update(self):
-        controller = self._get_card_viewport_controller()
-        if controller is None:
-            return
-        return controller._run_games_viewport_update()
-
-    def _on_games_scrollbar_command(self, *args):
-        controller = self._get_card_viewport_controller()
-        if controller is None:
-            return
-        return controller.on_games_scrollbar_command(*args)
-
-    def _on_games_scroll(self, _event=None):
-        controller = self._get_card_viewport_controller()
-        if controller is None:
-            return
-        return controller.on_games_scroll(_event)
-
-    def _rerender_cards_for_resize(self):
-        controller = self._get_card_viewport_controller()
-        if controller is None:
-            return
-        return controller._rerender_cards_for_resize()
 
     def _render_cards(self, keep_selection=False):
         controller = self._get_card_ui_controller()
