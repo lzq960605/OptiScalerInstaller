@@ -241,6 +241,11 @@ def build_mod_conflict_notice(findings: Iterable[ModConflictFinding], use_korean
     if not normalized_findings:
         return ""
 
+    # Ultimate ASI Loader-only detection is treated as informational and does not
+    # block or warn in the MOD popup flow.
+    if all(finding.kind == "ultimate_asi_loader" for finding in normalized_findings):
+        return ""
+
     lines = [_format_finding(finding, use_korean) for finding in normalized_findings]
     return build_mod_conflict_notice_text(lines, lang_from_bool(use_korean))
 

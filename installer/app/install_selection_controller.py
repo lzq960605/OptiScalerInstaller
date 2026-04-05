@@ -24,6 +24,7 @@ class InstallSelectionPrecheckOutcome:
     error: str = ""
     resolved_dll_name: str = ""
     popup_message: str = ""
+    mod_notice_message: str = ""
 
 
 @dataclass(frozen=True)
@@ -83,10 +84,14 @@ class InstallSelectionController:
         )
         self._apply_state(completed_state)
 
+        mod_notice_message = str(outcome.mod_notice_message or "").strip()
         popup_message = str(outcome.popup_message or "").strip()
-        if popup_message:
+        precheck_popup_message = "\n\n".join(
+            part for part in (popup_message, mod_notice_message) if part
+        ).strip()
+        if precheck_popup_message and not outcome.ok:
             self._schedule_callback(
-                lambda msg=popup_message: self._callbacks.show_precheck_popup(msg),
+                lambda msg=precheck_popup_message: self._callbacks.show_precheck_popup(msg),
                 description="install precheck popup",
             )
 
@@ -94,6 +99,29 @@ class InstallSelectionController:
             return
 
         selection_popup_message = str(self._callbacks.get_selection_popup_message(game) or "").strip()
+        if mod_notice_message and selection_popup_message:
+            self._schedule_callback(
+                lambda mod_msg=mod_notice_message, game_msg=selection_popup_message, state=completed_state: self._callbacks.show_selection_popup(
+                    mod_msg,
+                    lambda msg=game_msg, state_snapshot=state: self._callbacks.show_selection_popup(
+                        msg,
+                        lambda final_state=state_snapshot: self._confirm_selection(final_state),
+                    ),
+                ),
+                description="install mod notice popup",
+            )
+            return
+
+        if mod_notice_message:
+            self._schedule_callback(
+                lambda msg=mod_notice_message, state=completed_state: self._callbacks.show_selection_popup(
+                    msg,
+                    lambda state_snapshot=state: self._confirm_selection(state_snapshot),
+                ),
+                description="install mod notice popup",
+            )
+            return
+
         if selection_popup_message:
             self._schedule_callback(
                 lambda msg=selection_popup_message, state=completed_state: self._callbacks.show_selection_popup(

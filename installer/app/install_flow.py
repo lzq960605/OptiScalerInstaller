@@ -75,7 +75,7 @@ class InstallFlowController:
         try:
             logger.info("Running install precheck with handler: %s", getattr(handler, "handler_key", "default"))
             precheck = handler.run_install_precheck(game_data, self._is_korean(), logger)
-            notice_message = handler.format_precheck_notice(precheck, False)
+            notice_message = handler.format_precheck_notice(precheck, self._is_korean())
             if notice_message:
                 logger.info("Install precheck notice: %s", notice_message)
             if precheck.ok:
@@ -84,6 +84,7 @@ class InstallFlowController:
                 return InstallSelectionPrecheckOutcome(
                     ok=True,
                     resolved_dll_name=resolved_dll_name,
+                    mod_notice_message=notice_message,
                 )
             formatted_error = handler.format_precheck_error(precheck, self._is_korean())
             popup_message = handler.get_precheck_popup_message(precheck, self._is_korean())
@@ -92,6 +93,7 @@ class InstallFlowController:
                 ok=False,
                 error=formatted_error,
                 popup_message=popup_message,
+                mod_notice_message=notice_message,
             )
         except Exception as exc:
             logger.exception("Install precheck failed unexpectedly: %s", exc)

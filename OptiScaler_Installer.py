@@ -683,7 +683,12 @@ class OptiManagerApp:
 
         button_state = compute_install_button_state(self._build_install_button_state_inputs())
         can_install = bool(button_state.enabled)
-        button_text = self.txt.main.installing_button if button_state.show_installing else self.txt.main.install_button
+        if button_state.show_installing:
+            button_text = self.txt.main.installing_button
+        elif can_install:
+            button_text = self.txt.main.install_button
+        else:
+            button_text = ""
 
         self.apply_btn.configure(
             state="normal" if can_install else "disabled",

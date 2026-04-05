@@ -215,13 +215,17 @@ _STRINGS_BY_LANG: dict[Lang, AppStrings] = {
         precheck=PrecheckStrings(
             no_available_dll="설치에 사용할 수 있는 OptiScaler DLL 이름이 없습니다.",
             checked_names_template="확인한 이름: {names}",
-            mod_notice_header="기존 MOD 파일이 감지되었습니다. 설치 전에 현재 DLL 구성을 확인해 주세요.",
-            mod_notice_footer="안전 안내입니다. 동일한 proxy 이름을 사용하는 DLL 기반 MOD는 설치 또는 실행 동작과 충돌할 수 있습니다.",
-            reshade_detected_template="ReShade 관련 파일이 감지되었습니다: {detected}",
-            special_k_detected_template="Special K 관련 파일이 감지되었습니다: {detected}",
-            ultimate_asi_loader_detected_template="Ultimate ASI Loader 관련 파일이 감지되었습니다: {detected}",
-            renodx_detected_template="RenoDX addon 파일이 감지되었습니다: {detected}",
-            mod_detected_template="MOD 관련 파일이 감지되었습니다: {detected}",
+            mod_notice_header=(
+                "[RED]MOD가 설치된 상태에서 OptiScaler를 본 인스톨러를 통해 설치할 경우,\n"
+                "게임이 정상적으로 실행되지 않거나 오동작할 수 있습니다.\n"
+                "가능하면 OptiScaler를 수동으로 설치하는 것을 권장합니다.[END]"
+            ),
+            mod_notice_footer="그래도 설치를 진행하려면 메인 창의 설치 버튼을 눌러 진행해 주세요.",
+            reshade_detected_template="ReShade: {detected}",
+            special_k_detected_template="Special K: {detected}",
+            ultimate_asi_loader_detected_template="Ultimate ASI Loader: {detected}",
+            renodx_detected_template="RenoDX: {detected}",
+            mod_detected_template="MOD: {detected}",
             rdr2_blocked_mod_popup_template="[RED][DOT]현재 RDR2 설치는 MOD가 설치되지 않은 상태일 경우만 지원됩니다.[BR][DOT]MOD 지원 설치는 추가 확인 후 지원 예정입니다.[BR][DOT]감지된 MOD는 다음과 같습니다.[END][BR]{mods}",
         ),
     ),
@@ -313,13 +317,17 @@ _STRINGS_BY_LANG: dict[Lang, AppStrings] = {
         precheck=PrecheckStrings(
             no_available_dll="No available OptiScaler DLL names for installation.",
             checked_names_template="Checked: {names}",
-            mod_notice_header="Existing MOD files were detected. Please review the current DLL setup before installing.",
-            mod_notice_footer="This is a safety notice. DLL-based mods that share proxy names can conflict with installation or runtime behavior.",
-            reshade_detected_template="ReShade related files were detected: {detected}",
-            special_k_detected_template="Special K related files were detected: {detected}",
-            ultimate_asi_loader_detected_template="Ultimate ASI Loader related files were detected: {detected}",
-            renodx_detected_template="RenoDX addon files were detected: {detected}",
-            mod_detected_template="MOD-related files were detected: {detected}",
+            mod_notice_header=(
+                "[RED]If OptiScaler is installed through this installer while other mods are already installed,\n"
+                "the game may fail to launch or behave unexpectedly.\n"
+                "Manual installation is recommended.[END]"
+            ),
+            mod_notice_footer="To continue anyway, press the Install button in the main window.",
+            reshade_detected_template="ReShade: {detected}",
+            special_k_detected_template="Special K: {detected}",
+            ultimate_asi_loader_detected_template="Ultimate ASI Loader: {detected}",
+            renodx_detected_template="RenoDX: {detected}",
+            mod_detected_template="MOD: {detected}",
             rdr2_blocked_mod_popup_template="[RED][DOT]RDR2 installation is currently supported only when no MODs are installed.[BR][DOT]Support for installing with MODs enabled is planned after additional verification.[BR][DOT]The following MODs were detected:[END][BR]{mods}",
         ),
     ),
@@ -421,7 +429,7 @@ def build_mod_conflict_notice_text(lines: list[str], lang: Lang) -> str:
         [
             strings.precheck.mod_notice_header,
             "",
-            *(f"- {line}" for line in lines),
+            *(f"[INDENT][DOT]{line}" for line in lines),
             "",
             strings.precheck.mod_notice_footer,
         ]
