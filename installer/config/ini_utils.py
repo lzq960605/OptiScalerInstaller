@@ -6,7 +6,6 @@ import locale
 import os
 import re
 import stat
-import tempfile
 import unicodedata
 from pathlib import Path
 from typing import Optional
