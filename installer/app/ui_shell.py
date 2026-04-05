@@ -1,0 +1,231 @@
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+import logging
+from typing import Any
+
+from installer.i18n import pick_sheet_text
+
+from .install_state import build_selected_game_snapshot
+from .notice_controller import AppNoticeController
+from .ui_presenters import BottomPanelPresenter, HeaderStatusPresenter
+
+
+@dataclass(frozen=True)
+class AppUiShellCallbacks:
+    get_found_games: Callable[[], Sequence[Mapping[str, Any]]]
+    get_selected_game_index: Callable[[], int | None]
+    get_lang: Callable[[], str]
+
+
+class AppUiShell:
+    def __init__(
+        self,
+        *,
+        txt: Any,
+        get_notice_controller: Callable[[], AppNoticeController | None],
+        get_header_presenter: Callable[[], HeaderStatusPresenter | None],
+        get_bottom_presenter: Callable[[], BottomPanelPresenter | None],
+        callbacks: AppUiShellCallbacks,
+        scan_status_text_color: str,
+        status_indicator_offline_color: str,
+        status_indicator_warning_color: str,
+        status_indicator_loading_color: str,
+        status_indicator_online_color: str,
+        logger=None,
+    ) -> None:
+        self._txt = txt
+        self._get_notice_controller = get_notice_controller
+        self._get_header_presenter = get_header_presenter
+        self._get_bottom_presenter = get_bottom_presenter
+        self._callbacks = callbacks
+        self._scan_status_text_color = str(scan_status_text_color or "")
+        self._status_indicator_offline_color = str(status_indicator_offline_color or "")
+        self._status_indicator_warning_color = str(status_indicator_warning_color or "")
+        self._status_indicator_loading_color = str(status_indicator_loading_color or "")
+        self._status_indicator_online_color = str(status_indicator_online_color or "")
+        self._logger = logger or logging.getLogger()
+
+    def show_game_selection_popup(
+        self,
+        message_text: str,
+        on_confirm: Callable[[], None] | None = None,
+    ) -> None:
+        controller = self._get_notice_controller()
+        if controller is None:
+            return
+        controller.show_selection_popup(message_text, on_confirm=on_confirm)
+
+    def show_precheck_popup(
+        self,
+        message_text: str,
+        on_close: Callable[[], None] | None = None,
+    ) -> None:
+        controller = self._get_notice_controller()
+        if controller is None:
+            return
+        controller.show_precheck_popup(message_text, on_close=on_close)
+
+    def set_supported_games_wiki_link_hover(self, label_widget: Any, hovered: bool) -> None:
+        presenter = self._get_header_presenter()
+        if presenter is None:
+            return
+        presenter.set_supported_games_wiki_link_hover(label_widget, hovered)
+
+    def open_supported_games_wiki(self) -> bool:
+        controller = self._get_notice_controller()
+        if controller is None:
+            return False
+        return bool(controller.open_supported_games_wiki())
+
+    def set_scan_status_message(self, label_widget: Any, text: str = "", text_color: str | None = None) -> None:
+        presenter = self._get_header_presenter()
+        if presenter is None:
+            return
+        presenter.set_scan_status_message(
+            label_widget,
+            text,
+            text_color or self._scan_status_text_color,
+        )
+
+    def set_status_badge_state(
+        self,
+        label_widget: Any,
+        dot_widget: Any,
+        label_text: str,
+        indicator_color: str,
+        pulse: bool = False,
+    ) -> None:
+        presenter = self._get_header_presenter()
+        if presenter is None:
+            return
+        presenter.set_status_badge_state(
+            label_widget=label_widget,
+            dot_widget=dot_widget,
+            label_text=label_text,
+            indicator_color=indicator_color,
+            pulse=bool(pulse),
+        )
+
+    def get_selected_game_header_text(self) -> str:
+        selection = build_selected_game_snapshot(
+            self._callbacks.get_found_games(),
+            self._callbacks.get_selected_game_index(),
+            self._callbacks.get_lang(),
+        )
+        return selection.header_text
+
+    def update_selected_game_header(self, label_widget: Any) -> None:
+        presenter = self._get_header_presenter()
+        if presenter is None:
+            return
+        presenter.update_selected_game_header(label_widget, self.get_selected_game_header_text())
+
+    def show_after_install_popup(self, game: Mapping[str, Any]) -> None:
+        controller = self._get_notice_controller()
+        if controller is None:
+            return
+        normalized_game = dict(game or {})
+        controller.show_after_install_popup(
+            pick_sheet_text(normalized_game, "after_popup", self._callbacks.get_lang()),
+            guide_url=str(normalized_game.get("guidepage_after_installation") or ""),
+            guide_context=str(normalized_game.get("display", "<unknown>") or "<unknown>"),
+        )
+
+    def refresh_optiscaler_archive_info_ui(
+        self,
+        version_label: Any,
+        *,
+        sheet_loading: bool,
+        module_download_links: dict[str, Any],
+    ) -> None:
+        presenter = self._get_bottom_presenter()
+        if presenter is None:
+            return
+        presenter.refresh_optiscaler_archive_info_ui(
+            version_label,
+            sheet_loading=bool(sheet_loading),
+            module_download_links=module_download_links,
+            version_line_template=self._txt.main.version_line_template,
+        )
+
+    def apply_information_text_shift(self, info_text_widget: Any) -> None:
+        presenter = self._get_bottom_presenter()
+        if presenter is None:
+            return
+        presenter.apply_information_text_shift(info_text_widget)
+
+    def update_sheet_status(
+        self,
+        *,
+        label_widget: Any,
+        dot_widget: Any,
+        multi_gpu_blocked: bool,
+        gpu_selection_pending: bool,
+        sheet_loading: bool,
+        sheet_status: bool,
+    ) -> None:
+        presenter = self._get_header_presenter()
+        if presenter is None:
+            return
+        presenter.update_sheet_status(
+            label_widget=label_widget,
+            dot_widget=dot_widget,
+            multi_gpu_blocked=bool(multi_gpu_blocked),
+            gpu_selection_pending=bool(gpu_selection_pending),
+            sheet_loading=bool(sheet_loading),
+            sheet_status=bool(sheet_status),
+            status_gpu_config_text=self._txt.main.status_gpu_config,
+            status_gpu_select_text=self._txt.main.status_gpu_select,
+            status_game_db_text=self._txt.main.status_game_db,
+            indicator_offline=self._status_indicator_offline_color,
+            indicator_warning=self._status_indicator_warning_color,
+            indicator_loading=self._status_indicator_loading_color,
+            indicator_online=self._status_indicator_online_color,
+        )
+
+    def set_information_text(self, info_text_widget: Any, *, text: str = "") -> None:
+        presenter = self._get_bottom_presenter()
+        if presenter is None:
+            return
+        presenter.set_information_text(
+            info_text_widget,
+            text=text,
+            no_information_text=self._txt.main.no_information,
+        )
+
+
+def create_ui_shell(
+    app: Any,
+    *,
+    scan_status_text_color: str,
+    status_indicator_offline_color: str,
+    status_indicator_warning_color: str,
+    status_indicator_loading_color: str,
+    status_indicator_online_color: str,
+) -> AppUiShell:
+    return AppUiShell(
+        txt=app.txt,
+        get_notice_controller=lambda: getattr(app, "_app_notice_controller", None),
+        get_header_presenter=lambda: getattr(app, "_header_status_presenter", None),
+        get_bottom_presenter=lambda: getattr(app, "_bottom_panel_presenter", None),
+        callbacks=AppUiShellCallbacks(
+            get_found_games=lambda: tuple(getattr(app, "found_exe_list", ())),
+            get_selected_game_index=lambda: getattr(getattr(app, "card_ui_state", None), "selected_game_index", None),
+            get_lang=lambda: str(getattr(app, "lang", "en") or "en"),
+        ),
+        scan_status_text_color=scan_status_text_color,
+        status_indicator_offline_color=status_indicator_offline_color,
+        status_indicator_warning_color=status_indicator_warning_color,
+        status_indicator_loading_color=status_indicator_loading_color,
+        status_indicator_online_color=status_indicator_online_color,
+        logger=logging.getLogger(),
+    )
+
+
+__all__ = [
+    "AppUiShell",
+    "AppUiShellCallbacks",
+    "create_ui_shell",
+]

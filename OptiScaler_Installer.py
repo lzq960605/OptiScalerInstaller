@@ -67,6 +67,7 @@ from installer.app.ui_controller_factory import (
     create_card_ui_controller,
     create_card_viewport_bundle,
 )
+from installer.app.ui_shell import AppUiShell, create_ui_shell
 from installer.app.ui_presenters import BottomPanelPresenter, HeaderStatusPresenter
 from installer.common.poster_loader import PosterImageLoader, PosterLoaderConfig
 from installer.config import ini_utils
@@ -75,7 +76,6 @@ from installer.i18n import (
     get_app_strings,
     is_korean,
     pick_module_message,
-    pick_sheet_text,
 )
 from installer.install import (
     services as installer_services,
@@ -456,6 +456,7 @@ class OptiManagerApp:
         self._app_controllers = None
         self._install_flow_controller = None
         self._startup_runtime_coordinator = None
+        self._ui_shell = None
         self._card_viewport_controller = None
         self._card_viewport_runtime = None
         self._card_ui_controller = None
@@ -548,6 +549,7 @@ class OptiManagerApp:
         self._sync_card_viewport_runtime_to_app()
         self._app_controllers = build_app_controllers(self, APP_CONTROLLER_FACTORY_CONFIG)
         bind_app_controllers(self, self._app_controllers)
+        self._create_ui_shell()
         self._create_startup_runtime_coordinator()
 
     def _start_background_services(self) -> None:
@@ -580,20 +582,20 @@ class OptiManagerApp:
         message_text: str,
         on_confirm: Optional[Callable[[], None]] = None,
     ) -> None:
-        controller = self._app_notice_controller
-        if controller is None:
+        shell = self._get_ui_shell()
+        if shell is None:
             return
-        controller.show_selection_popup(message_text, on_confirm=on_confirm)
+        shell.show_game_selection_popup(message_text, on_confirm=on_confirm)
 
     def _show_precheck_popup(
         self,
         message_text: str,
         on_close: Optional[Callable[[], None]] = None,
     ) -> None:
-        controller = self._app_notice_controller
-        if controller is None:
+        shell = self._get_ui_shell()
+        if shell is None:
             return
-        controller.show_precheck_popup(message_text, on_close=on_close)
+        shell.show_precheck_popup(message_text, on_close=on_close)
 
     def _is_multi_gpu_block_active(self) -> bool:
         return self.gpu_state.gpu_count > MAX_SUPPORTED_GPU_COUNT
@@ -616,70 +618,64 @@ class OptiManagerApp:
         return True
 
     def _set_supported_games_wiki_link_hover(self, hovered: bool) -> None:
-        presenter = self._header_status_presenter
-        if presenter is None:
+        shell = self._get_ui_shell()
+        if shell is None:
             return
-        presenter.set_supported_games_wiki_link_hover(
+        shell.set_supported_games_wiki_link_hover(
             getattr(self, "lbl_supported_games_wiki_link", None),
             hovered,
         )
 
     def _open_supported_games_wiki(self, _event=None) -> None:
-        controller = self._app_notice_controller
-        if controller is None:
+        shell = self._get_ui_shell()
+        if shell is None:
             return
-        controller.open_supported_games_wiki()
+        shell.open_supported_games_wiki()
 
     def _set_scan_status_message(self, text: str = "", text_color: Optional[str] = None):
-        presenter = self._header_status_presenter
-        if presenter is None:
+        shell = self._get_ui_shell()
+        if shell is None:
             return
-        resolved_text_color = text_color or APP_THEME.scan_status_text_color
-        presenter.set_scan_status_message(
+        shell.set_scan_status_message(
             getattr(self, "lbl_scan_status", None),
             text,
-            resolved_text_color,
+            text_color,
         )
 
     def _set_status_badge_state(self, label_text: str, indicator_color: str, pulse: bool = False):
-        presenter = self._header_status_presenter
-        if presenter is None:
+        shell = self._get_ui_shell()
+        if shell is None:
             return
-        presenter.set_status_badge_state(
-            label_widget=getattr(self, "status_badge_label", None),
-            dot_widget=getattr(self, "status_badge_dot", None),
+        shell.set_status_badge_state(
+            getattr(self, "status_badge_label", None),
+            getattr(self, "status_badge_dot", None),
             label_text=label_text,
             indicator_color=indicator_color,
             pulse=pulse,
         )
 
     def _get_selected_game_header_text(self) -> str:
-        selection = build_selected_game_snapshot(
-            self.found_exe_list,
-            self.card_ui_state.selected_game_index,
-            getattr(self, "lang", "en"),
-        )
-        return selection.header_text
+        shell = self._get_ui_shell()
+        if shell is None:
+            selection = build_selected_game_snapshot(
+                self.found_exe_list,
+                self.card_ui_state.selected_game_index,
+                getattr(self, "lang", "en"),
+            )
+            return selection.header_text
+        return shell.get_selected_game_header_text()
 
     def _update_selected_game_header(self):
-        presenter = self._header_status_presenter
-        if presenter is None:
+        shell = self._get_ui_shell()
+        if shell is None:
             return
-        presenter.update_selected_game_header(
-            getattr(self, "lbl_selected_game_header", None),
-            self._get_selected_game_header_text(),
-        )
+        shell.update_selected_game_header(getattr(self, "lbl_selected_game_header", None))
 
     def _show_after_install_popup(self, game: dict):
-        msg = pick_sheet_text(game, "after_popup", self.lang)
-        controller = self._app_notice_controller
-        if controller is None:
+        shell = self._get_ui_shell()
+        if shell is None:
             return
-        controller.show_after_install_popup(
-            msg,
-            guide_url=str(game.get("guidepage_after_installation") or ""),
-            guide_context=str(game.get("display", "<unknown>") or "<unknown>"),
-        )
+        shell.show_after_install_popup(game)
 
     def _cancel_after_handle(self, attr_name: str) -> None:
         after_id = getattr(self, attr_name, None)
@@ -714,6 +710,16 @@ class OptiManagerApp:
 
     def _get_card_ui_controller(self) -> Optional[GameCardUiController]:
         return getattr(self, "_card_ui_controller", None)
+
+    def _get_ui_shell(self) -> Optional[AppUiShell]:
+        shell = getattr(self, "_ui_shell", None)
+        if shell is None and hasattr(self, "txt"):
+            try:
+                self._create_ui_shell()
+            except AttributeError:
+                return None
+            shell = getattr(self, "_ui_shell", None)
+        return shell
 
     def _get_startup_runtime_coordinator(self) -> Optional[StartupRuntimeCoordinator]:
         return getattr(self, "_startup_runtime_coordinator", None)
@@ -925,6 +931,18 @@ class OptiManagerApp:
             default_sheet_gid=SHEET_GID,
         )
 
+    def _create_ui_shell(self) -> None:
+        if getattr(self, "_ui_shell", None) is not None:
+            return
+        self._ui_shell = create_ui_shell(
+            self,
+            scan_status_text_color=APP_THEME.scan_status_text_color,
+            status_indicator_offline_color=APP_THEME.status_indicator_offline_color,
+            status_indicator_warning_color=APP_THEME.status_indicator_warning_color,
+            status_indicator_loading_color=APP_THEME.status_indicator_loading_color,
+            status_indicator_online_color=APP_THEME.status_indicator_online_color,
+        )
+
     def _pump_poster_queue(self) -> None:
         self._poster_queue.pump()
 
@@ -952,46 +970,38 @@ class OptiManagerApp:
         build_main_ui(self, APP_THEME.main_ui_theme)
 
     def _refresh_optiscaler_archive_info_ui(self):
-        presenter = self._bottom_panel_presenter
-        if presenter is None:
+        shell = self._get_ui_shell()
+        if shell is None:
             return
-        presenter.refresh_optiscaler_archive_info_ui(
+        shell.refresh_optiscaler_archive_info_ui(
             getattr(self, "lbl_optiscaler_version_line", None),
             sheet_loading=bool(self.sheet_state.loading),
             module_download_links=self.sheet_state.module_download_links,
-            version_line_template=self.txt.main.version_line_template,
         )
 
     def _apply_information_text_shift(self):
-        presenter = self._bottom_panel_presenter
-        if presenter is None:
+        shell = self._get_ui_shell()
+        if shell is None:
             return
-        presenter.apply_information_text_shift(getattr(self, "info_text", None))
+        shell.apply_information_text_shift(getattr(self, "info_text", None))
 
     # ------------------------------------------------------------------
     # Status indicator
     # ------------------------------------------------------------------
 
     def _update_sheet_status(self):
-        presenter = self._header_status_presenter
-        if presenter is None:
+        shell = self._get_ui_shell()
+        if shell is None:
             return
         gpu_state = self.gpu_state
         sheet_state = self.sheet_state
-        presenter.update_sheet_status(
+        shell.update_sheet_status(
             label_widget=getattr(self, "status_badge_label", None),
             dot_widget=getattr(self, "status_badge_dot", None),
             multi_gpu_blocked=gpu_state.multi_gpu_blocked,
             gpu_selection_pending=gpu_state.gpu_selection_pending,
             sheet_loading=sheet_state.loading,
             sheet_status=sheet_state.status,
-            status_gpu_config_text=self.txt.main.status_gpu_config,
-            status_gpu_select_text=self.txt.main.status_gpu_select,
-            status_game_db_text=self.txt.main.status_game_db,
-            indicator_offline=APP_THEME.status_indicator_offline_color,
-            indicator_warning=APP_THEME.status_indicator_warning_color,
-            indicator_loading=APP_THEME.status_indicator_loading_color,
-            indicator_online=APP_THEME.status_indicator_online_color,
         )
 
     # ------------------------------------------------------------------
@@ -999,13 +1009,12 @@ class OptiManagerApp:
     # ------------------------------------------------------------------
 
     def _set_information_text(self, text=""):
-        presenter = self._bottom_panel_presenter
-        if presenter is None:
+        shell = self._get_ui_shell()
+        if shell is None:
             return
-        presenter.set_information_text(
+        shell.set_information_text(
             getattr(self, "info_text", None),
             text=text,
-            no_information_text=self.txt.main.no_information,
         )
 
     # ------------------------------------------------------------------
