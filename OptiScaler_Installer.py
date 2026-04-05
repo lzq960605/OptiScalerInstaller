@@ -511,7 +511,7 @@ class OptiManagerApp:
         )
 
     def _initialize_ui_and_controllers(self) -> None:
-        self.setup_ui()
+        build_main_ui(self, APP_THEME.main_ui_theme)
         ui_controllers = build_ui_controllers(self, UI_CONTROLLER_FACTORY_CONFIG)
         bind_ui_controllers(self, ui_controllers)
         self._bind_viewport_scroll_events()
@@ -895,9 +895,6 @@ class OptiManagerApp:
     # ------------------------------------------------------------------
     # UI builder
     # ------------------------------------------------------------------
-
-    def setup_ui(self):
-        build_main_ui(self, APP_THEME.main_ui_theme)
 
     def _refresh_optiscaler_archive_info_ui(self):
         shell = self._get_ui_shell()
