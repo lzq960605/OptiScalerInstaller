@@ -33,13 +33,13 @@
 | **NVIDIA** | RTX 20/30 Series | DLSS | XeFG (2x only) |
 
 **Notes**
-- **AMD RX 9000, NVIDIA RTX 40/50 Series:** devices are supported only in games that do **not** support in-game FSR Frame Generation.  
+- **AMD RX 9000, NVIDIA RTX 40/50 Series:** devices are supported only in games that do **not** support in-game native Frame Generation.  
   **Examples:** *Kingdom Come: Deliverance II*, *Death Stranding Director’s Cut*
 - **XeMFG is Intel XeFG Multi Frame Generation Feature** only available for Intel Arc for now.
 
 **Frame Generation Notes**
-- NVIDIA RTX 20/30 Series GPUs do not support native DLSS Frame Generation. This installer enables frame generation by using Intel XeFG instead.
-- AMD GPUs use Intel XeFG for frame generation instead of FSR3 Frame Generation after installation.
+- NVIDIA RTX 20/30 Series GPUs do not support native DLSS Frame Generation. This installer enables frame generation by using OptiScaler & Intel XeFG instead.
+- AMD GPUs use OptiScaler & Intel XeFG for frame generation instead of FSR3 Frame Generation after installation.
 
 &nbsp;
 ## ✨ Key Features
