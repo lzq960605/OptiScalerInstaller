@@ -372,7 +372,7 @@ def extract_archive(archive_path, target_path, logger=None):
             **subprocess_no_window_kwargs(),
         )
         if logger:
-            logger.info(f"Extracted archive {archive_path} to {target_path} using tar.exe")
+            logger.info("Extracted archive %s to %s using tar.exe", archive_path, target_path)
 
     try:
         if ext == ".zip":
@@ -384,12 +384,12 @@ def extract_archive(archive_path, target_path, logger=None):
                     for member in z.infolist():
                         z.extract(member, target_path)
                 if logger:
-                    logger.info(f"Extracted .zip archive {archive_path} to {target_path}")
+                    logger.info("Extracted .zip archive %s to %s", archive_path, target_path)
                 return
             except Exception as e:
                 extractor_errors.append(f"zipfile: {e}")
                 if logger:
-                    logger.warning(f"Python zipfile extraction failed, trying tar fallback: {e}")
+                    logger.warning("Python zipfile extraction failed, trying tar fallback: %s", e)
                 else:
                     logging.warning("Python zipfile extraction failed, trying tar fallback: %s", e)
 
@@ -400,7 +400,7 @@ def extract_archive(archive_path, target_path, logger=None):
                 except subprocess.CalledProcessError as e:
                     extractor_errors.append(f"tar: {e}")
                     if logger:
-                        logger.warning(f"tar.exe extraction failed ({archive_path}), falling back: {e}")
+                        logger.warning("tar.exe extraction failed (%s), falling back: %s", archive_path, e)
                     else:
                         logging.warning("tar.exe extraction failed (%s), falling back: %s", archive_path, e)
             raise RuntimeError(f"Failed to extract .zip file: {archive_path}")
@@ -416,11 +416,11 @@ def extract_archive(archive_path, target_path, logger=None):
                     extractor_errors.append(f"tar: {e}")
                     if py7zr is not None:
                         if logger:
-                            logger.warning(f"tar.exe extraction failed ({archive_path}), trying py7zr fallback: {e}")
+                            logger.warning("tar.exe extraction failed (%s), trying py7zr fallback: %s", archive_path, e)
                         else:
                             logging.warning("tar.exe extraction failed (%s), trying py7zr fallback: %s", archive_path, e)
                     elif logger:
-                        logger.warning(f"tar.exe extraction failed ({archive_path}) and no py7zr fallback is available: {e}")
+                        logger.warning("tar.exe extraction failed (%s) and no py7zr fallback is available: %s", archive_path, e)
                     else:
                         logging.warning(
                             "tar.exe extraction failed (%s) and no py7zr fallback is available: %s",
@@ -436,17 +436,17 @@ def extract_archive(archive_path, target_path, logger=None):
                                 raise ValueError(f"Unsafe archive entry path: {member_name}")
                         archive.extractall(path=target_path)
                     if logger:
-                        logger.info(f"Extracted .7z archive {archive_path} to {target_path} using py7zr")
+                        logger.info("Extracted .7z archive %s to %s using py7zr", archive_path, target_path)
                     return
                 except Exception as e:
                     extractor_errors.append(f"py7zr: {e}")
                     if tar_exe:
                         if logger:
-                            logger.warning(f"py7zr extraction failed ({archive_path}) after tar fallback: {e}")
+                            logger.warning("py7zr extraction failed (%s) after tar fallback: %s", archive_path, e)
                         else:
                             logging.warning("py7zr extraction failed (%s) after tar fallback: %s", archive_path, e)
                     elif logger:
-                        logger.warning(f"py7zr extraction failed ({archive_path}): {e}")
+                        logger.warning("py7zr extraction failed (%s): %s", archive_path, e)
                     else:
                         logging.warning("py7zr extraction failed (%s): %s", archive_path, e)
 
@@ -463,14 +463,14 @@ def extract_archive(archive_path, target_path, logger=None):
             except subprocess.CalledProcessError as e:
                 extractor_errors.append(f"tar: {e}")
                 if logger:
-                    logger.warning(f"tar.exe extraction failed ({archive_path}), falling back: {e}")
+                    logger.warning("tar.exe extraction failed (%s), falling back: %s", archive_path, e)
                 else:
                     logging.warning("tar.exe extraction failed (%s), falling back: %s", archive_path, e)
 
         raise ValueError(f"Unsupported archive format: {ext}")
     except Exception as e:
         if logger:
-            logger.error(f"Failed to extract archive {archive_path} to {target_path}: {e}")
+            logger.error("Failed to extract archive %s to %s: %s", archive_path, target_path, e)
         raise
 
 
@@ -508,7 +508,7 @@ def download_to_file(url, dest_path, timeout=60, logger=None):
                     f.write(chunk)
         tmp_path.replace(p)
         if logger:
-            logger.info(f"Downloaded file from {url} to {dest_path}")
+            logger.info("Downloaded file from %s to %s", url, dest_path)
     except Exception as e:
         try:
             if tmp_path and tmp_path.exists():
@@ -516,7 +516,7 @@ def download_to_file(url, dest_path, timeout=60, logger=None):
         except Exception:
             logging.debug("Failed to remove temp download file: %s", tmp_path)
         if logger:
-            logger.error(f"Failed to download {url} to {dest_path}: {e}")
+            logger.error("Failed to download %s to %s: %s", url, dest_path, e)
         raise
 
 
@@ -630,7 +630,7 @@ def install_unreal5_from_url(url, target_path, logger=None):
         download_to_file(url, archive_path, timeout=60, logger=logger)
         extract_archive(archive_path, target_path, logger=logger)
         if logger:
-            logger.info(f"Unreal5 patch installed from URL: {url}")
+            logger.info("Unreal5 patch installed from URL: %s", url)
     return True
 
 
@@ -661,4 +661,4 @@ def install_reframework_dinput8_from_url(url, target_path, logger=None):
             with z.open(dll_member, "r") as src_fp, open(dst, "wb") as dst_fp:
                 shutil.copyfileobj(src_fp, dst_fp)
         if logger:
-            logger.info(f"REFramework dinput8.dll installed from URL: {url}")
+            logger.info("REFramework dinput8.dll installed from URL: %s", url)

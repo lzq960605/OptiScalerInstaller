@@ -53,9 +53,6 @@ class CardRenderController:
             selected_index = int(previous_selected_index)
             self._callbacks.restore_selection(selected_index, normalized_games[selected_index])
 
-        if not normalized_games:
-            pass
-
         self._callbacks.schedule_scrollregion_refresh()
         self._callbacks.pump_poster_queue()
 
