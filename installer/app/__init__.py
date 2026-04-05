@@ -5,6 +5,7 @@ from .archive_controller import ArchivePreparationCallbacks, ArchivePreparationC
 from .app_actions_controller import AppActionCallbacks, AppActionsController
 from .app_shutdown_controller import AppShutdownCallbacks, AppShutdownController, AppShutdownStep
 from .card_factory import GameCardBuildResult, GameCardTheme, create_game_card
+from .card_ui import GameCardUiCallbacks, GameCardUiController
 from .card_layout import (
     CardOverflowFitDecision,
     CardResizeReflowDecision,
@@ -68,6 +69,19 @@ from .scan_feedback import ScanFeedbackCallbacks, ScanFeedbackController
 from .scan_entry_controller import ScanEntryCallbacks, ScanEntryController, ScanEntryState
 from .scan_controller import ScanController, ScanControllerCallbacks
 from .startup_flow import StartupFlowController, StartupFlowCallbacks
+from .startup_window import (
+    StartupWindowLayout,
+    apply_startup_window_layout,
+    apply_startup_window_workaround,
+    build_centered_window_geometry,
+    build_startup_window_layout,
+    get_ctk_scale,
+    get_umpc_startup_window_size,
+    is_windows_slate_mode,
+    resolve_startup_poster_target_size,
+    should_apply_umpc_window_workaround,
+)
+from .theme import AppThemeBundle, build_app_theme
 from .ui_presenters import BottomPanelPresenter, HeaderStatusPresenter
 
 __all__ = [
@@ -80,6 +94,7 @@ __all__ = [
     "AppShutdownCallbacks",
     "AppShutdownController",
     "AppShutdownStep",
+    "AppThemeBundle",
     "ArchiveRuntimeState",
     "BottomPanelPresenter",
     "CardUiRuntimeState",
@@ -93,6 +108,8 @@ __all__ = [
     "CardViewportController",
     "CardViewportRuntime",
     "GameCardBuildResult",
+    "GameCardUiCallbacks",
+    "GameCardUiController",
     "GameCardTheme",
     "GameCardVisualTheme",
     "CardGridPlacement",
@@ -127,12 +144,20 @@ __all__ = [
     "SheetRuntimeState",
     "StartupFlowController",
     "StartupFlowCallbacks",
+    "StartupWindowLayout",
     "RuntimeStateBundle",
     "HeaderStatusPresenter",
+    "apply_startup_window_layout",
+    "apply_startup_window_workaround",
+    "build_centered_window_geometry",
     "build_runtime_state_bundle",
+    "build_app_theme",
+    "build_startup_window_layout",
     "create_modal_popup",
     "create_popup_markup_text",
     "get_runtime_state_attr",
+    "get_ctk_scale",
+    "get_umpc_startup_window_size",
     "estimate_wrapped_text_lines",
     "gpu_notice",
     "message_popup",
@@ -156,8 +181,11 @@ __all__ = [
     "render_markup_to_text_widget",
     "rtss_notice",
     "show_message_popup",
+    "is_windows_slate_mode",
+    "resolve_startup_poster_target_size",
     "set_runtime_state_attr",
     "strip_markup_text",
+    "should_apply_umpc_window_workaround",
     "update_game_card_base_image",
     "validate_install_entry",
 ]

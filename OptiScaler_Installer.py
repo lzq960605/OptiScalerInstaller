@@ -10,7 +10,6 @@ import sys
 from pathlib import Path
 import re
 from typing import Callable, Optional
-import ctypes
 from installer import app_update
 from installer.app import (
     AppActionsController,
@@ -21,10 +20,13 @@ from installer.app import (
     AppShutdownController,
     ArchivePreparationController,
     ArchivePreparationState,
+    build_app_theme,
     BottomPanelPresenter,
     build_runtime_state_bundle,
     CardUiRuntimeState,
     CardRenderController,
+    GameCardUiCallbacks,
+    GameCardUiController,
     GameDbLoadController,
     GameDbLoadResult,
     get_runtime_state_attr,
@@ -40,8 +42,6 @@ from installer.app import (
     InstallSelectionController,
     InstallSelectionPrecheckOutcome,
     InstallSelectionUiState,
-    GameCardTheme,
-    GameCardVisualTheme,
     build_card_grid_placements,
     build_install_button_state_inputs,
     build_selected_game_snapshot,
@@ -74,7 +74,13 @@ from installer.app import (
 from installer.app.window_focus import has_startup_foreground_request, request_window_foreground
 from installer.app.poster_queue import PosterQueueController
 from installer.app.scan_controller import ScanController
-from installer.app.ui_builder import MainUiTheme, build_main_ui
+from installer.app.startup_window import (
+    apply_startup_window_layout,
+    apply_startup_window_workaround,
+    build_startup_window_layout,
+    get_ctk_scale,
+)
+from installer.app.ui_builder import build_main_ui
 from installer.common.poster_loader import PosterImageLoader, PosterLoaderConfig
 from installer.config import ini_utils
 from installer.i18n import (
@@ -285,7 +291,6 @@ WINDOW_W = GRID_W
 WINDOW_H = 710
 WINDOW_MIN_W = 360
 WINDOW_MIN_H = 420
-_SM_CONVERTIBLESLATEMODE = 0x2003
 LOCAL_APPDATA_DIR = Path(os.environ.get("LOCALAPPDATA") or Path(tempfile.gettempdir()))
 APP_CACHE_DIR = LOCAL_APPDATA_DIR / "OptiScalerInstaller"
 OPTISCALER_CACHE_DIR = APP_CACHE_DIR / "cache" / "optiscaler"
@@ -309,37 +314,6 @@ DEFAULT_POSTER_CANDIDATES = [
 BUNDLED_COVER_FILENAME_MAP = {
     "rtss.webp": "RTSS.webp",
 }
-
-
-def _is_windows_slate_mode() -> bool:
-    if os.name != "nt":
-        return False
-    try:
-        return int(ctypes.windll.user32.GetSystemMetrics(_SM_CONVERTIBLESLATEMODE)) == 0
-    except Exception:
-        logging.debug("[APP] Failed to read SM_CONVERTIBLESLATEMODE", exc_info=True)
-        return False
-
-
-def _build_centered_window_geometry(screen_w: int, screen_h: int, width: int, height: int) -> str:
-    x = max(0, (max(1, int(screen_w)) - max(1, int(width))) // 2)
-    y = max(0, (max(1, int(screen_h)) - max(1, int(height))) // 2)
-    return f"{max(1, int(width))}x{max(1, int(height))}+{x}+{y}"
-
-
-def _should_apply_umpc_window_workaround(screen_w: int, screen_h: int, target_w: int, target_h: int) -> bool:
-    if not _is_windows_slate_mode():
-        return False
-
-    width_ratio = max(1, int(target_w)) / max(1, int(screen_w))
-    height_ratio = max(1, int(target_h)) / max(1, int(screen_h))
-    return width_ratio >= 0.90 or height_ratio >= 0.84 or max(1, int(screen_h)) <= WINDOW_H + 140
-
-
-def _get_umpc_startup_window_size(screen_w: int, screen_h: int, target_w: int, target_h: int) -> tuple[int, int]:
-    compact_w = min(int(target_w), max(WINDOW_MIN_W, int(screen_w) - max(96, int(screen_w) // 10)))
-    compact_h = min(int(target_h), max(WINDOW_MIN_H, int(screen_h) - max(140, int(screen_h) // 6)))
-    return max(WINDOW_MIN_W, compact_w), max(WINDOW_MIN_H, compact_h)
 IMAGE_TIMEOUT_SECONDS = 10
 IMAGE_MAX_RETRIES = 3
 IMAGE_MAX_WORKERS = 4
@@ -349,24 +323,6 @@ INFO_TEXT_OFFSET_PX = 10
 POSTER_CACHE_VERSION = 2
 ENABLE_POSTER_CACHE = os.environ.get("OPTISCALER_ENABLE_POSTER_CACHE", "1").strip().lower() in {"1", "true", "yes", "on"}
 IMAGE_CACHE_MAX = int(os.environ.get("OPTISCALER_IMAGE_CACHE_MAX", "100"))
-
-
-def _get_ctk_scale(window: object | None = None, default: float = 1.0) -> float:
-    try:
-        if window is not None and hasattr(window, "_get_window_scaling"):
-            scale = float(window._get_window_scaling())
-            if scale > 0:
-                return scale
-    except Exception:
-        logging.debug("[APP] Failed to read CustomTkinter scaling", exc_info=True)
-    return float(default)
-
-
-def _resolve_startup_poster_target_size(window: object | None = None, default_scale: float = DEFAULT_POSTER_SCALE) -> tuple[int, int, float]:
-    scale = _get_ctk_scale(window, default_scale)
-    target_width = max(1, int(round(CARD_W * scale)))
-    target_height = max(1, int(round(CARD_H * scale)))
-    return target_width, target_height, scale
 
 
 def _format_optiscaler_version_display_name(raw_name: str) -> str:
@@ -386,88 +342,37 @@ def _format_optiscaler_version_display_name(raw_name: str) -> str:
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-# Accent colours
-_ACCENT = "#4CC9F0"
-_ACCENT_HOVER = "#35B6E0"
-_ACCENT_SUCCESS = "#7EE1AA"
-_TITLE_TEXT = "#D6DCE5"
-_BROWSE_BUTTON = "#5B6574"
-_BROWSE_BUTTON_HOVER = "#6A7587"
-_POPUP_OK_BUTTON = "#8A95A3"
-_POPUP_OK_BUTTON_HOVER = "#99A4B1"
-_INSTALL_BUTTON = "#D6AA43"
-_INSTALL_BUTTON_HOVER = "#E2BA58"
-_INSTALL_BUTTON_BORDER = "#F0D082"
-_INSTALL_BUTTON_DISABLED = "#4B4338"
-_INSTALL_BUTTON_BORDER_DISABLED = "#5B5246"
-_INSTALL_BUTTON_TEXT = "#0B121A"
-_STATUS_TEXT = "#C5CFDB"
-_SELECTED_GAME_HIGHLIGHT = "#FFCB62"
-_SCAN_STATUS_TEXT = "#AEB9C8"
-_STATUS_INDICATOR_LOADING = "#7EE1AA"
-_STATUS_INDICATOR_LOADING_DIM = "#415C4D"
-_STATUS_INDICATOR_ONLINE = "#7EE1AA"
-_STATUS_INDICATOR_WARNING = "#FFCB62"
-_STATUS_INDICATOR_OFFLINE = "#FF8A8A"
-_STATUS_INDICATOR_SIZE = 10
-_STATUS_INDICATOR_Y_OFFSET = 2
-_STATUS_INDICATOR_PULSE_MS = 620
-_CONTENT_SIDE_PAD = 20
-_META_RIGHT_PAD = 5
-_SCAN_META_RIGHT_INSET = _CONTENT_SIDE_PAD + _META_RIGHT_PAD
-_LINK_ACTIVE = _SELECTED_GAME_HIGHLIGHT
-_LINK_HOVER = "#FFE08F"
-_CARD_BG = "#181B21"
-_CARD_TITLE_OVERLAY_BG = "#243447"
-_CARD_TITLE_OVERLAY_TEXT = "#FFFFFF"
-_SURFACE = "#2A2E35"
-_PANEL = "#1E2128"
-_ACCENT_DISABLED = "#3A414C"
-FONT_HEADING = APP_STRINGS.main.heading_font_family
-FONT_UI = APP_STRINGS.main.ui_font_family
-RTSS_NOTICE_THEME = rtss_notice.RtssNoticeTheme(
-    surface_color=_SURFACE,
-    accent_color=_ACCENT,
-    accent_hover_color=_ACCENT_HOVER,
-    font_ui=FONT_UI,
-)
-GPU_NOTICE_THEME = gpu_notice.GpuNoticeTheme(
-    surface_color=_SURFACE,
-    accent_color=_ACCENT,
-    accent_hover_color=_ACCENT_HOVER,
-    font_ui=FONT_UI,
-)
-MESSAGE_POPUP_THEME = message_popup.MessagePopupTheme(
-    surface_color=_SURFACE,
-    accent_color=_POPUP_OK_BUTTON,
-    accent_hover_color=_POPUP_OK_BUTTON_HOVER,
-    font_ui=FONT_UI,
-)
-MAIN_UI_THEME = MainUiTheme(
-    panel_color=_PANEL,
-    surface_color=_SURFACE,
-    title_text_color=_TITLE_TEXT,
-    font_heading=FONT_HEADING,
-    font_ui=FONT_UI,
-    status_indicator_size=_STATUS_INDICATOR_SIZE,
-    status_indicator_loading_color=_STATUS_INDICATOR_LOADING,
-    status_indicator_y_offset=_STATUS_INDICATOR_Y_OFFSET,
-    status_text_color=_STATUS_TEXT,
-    content_side_pad=_CONTENT_SIDE_PAD,
-    browse_button_color=_BROWSE_BUTTON,
-    browse_button_hover_color=_BROWSE_BUTTON_HOVER,
-    scan_status_text_color=_SCAN_STATUS_TEXT,
-    scan_meta_right_inset=_SCAN_META_RIGHT_INSET,
+APP_THEME = build_app_theme(
+    APP_STRINGS,
     supported_games_wiki_url=SUPPORTED_GAMES_WIKI_URL,
-    link_active_color=_LINK_ACTIVE,
-    meta_right_pad=_META_RIGHT_PAD,
-    selected_game_highlight_color=_SELECTED_GAME_HIGHLIGHT,
     grid_width=GRID_W,
     grid_height=GRID_H,
-    install_button_disabled_color=_INSTALL_BUTTON_DISABLED,
-    install_button_text_color=_INSTALL_BUTTON_TEXT,
-    install_button_border_disabled_color=_INSTALL_BUTTON_BORDER_DISABLED,
 )
+FONT_HEADING = APP_THEME.font_heading
+FONT_UI = APP_THEME.font_ui
+_INSTALL_BUTTON = APP_THEME.install_button_color
+_INSTALL_BUTTON_HOVER = APP_THEME.install_button_hover_color
+_INSTALL_BUTTON_BORDER = APP_THEME.install_button_border_color
+_INSTALL_BUTTON_DISABLED = APP_THEME.install_button_disabled_color
+_INSTALL_BUTTON_BORDER_DISABLED = APP_THEME.install_button_border_disabled_color
+_INSTALL_BUTTON_TEXT = APP_THEME.install_button_text_color
+_STATUS_TEXT = APP_THEME.status_text_color
+_SCAN_STATUS_TEXT = APP_THEME.scan_status_text_color
+_STATUS_INDICATOR_LOADING = APP_THEME.status_indicator_loading_color
+_STATUS_INDICATOR_LOADING_DIM = APP_THEME.status_indicator_loading_dim_color
+_STATUS_INDICATOR_ONLINE = APP_THEME.status_indicator_online_color
+_STATUS_INDICATOR_WARNING = APP_THEME.status_indicator_warning_color
+_STATUS_INDICATOR_OFFLINE = APP_THEME.status_indicator_offline_color
+_STATUS_INDICATOR_PULSE_MS = APP_THEME.status_indicator_pulse_ms
+_LINK_ACTIVE = APP_THEME.link_active_color
+_LINK_HOVER = APP_THEME.link_hover_color
+_CARD_BG = APP_THEME.card_background
+_CARD_TITLE_OVERLAY_BG = APP_THEME.card_title_overlay_background
+_CARD_TITLE_OVERLAY_TEXT = APP_THEME.card_title_overlay_text
+RTSS_NOTICE_THEME = APP_THEME.rtss_notice_theme
+GPU_NOTICE_THEME = APP_THEME.gpu_notice_theme
+MESSAGE_POPUP_THEME = APP_THEME.message_popup_theme
+MAIN_UI_THEME = APP_THEME.main_ui_theme
 APP_CONTROLLER_FACTORY_CONFIG = AppControllerFactoryConfig(
     assets_dir=ASSETS_DIR,
     create_prefixed_logger=get_prefixed_logger,
@@ -500,42 +405,34 @@ class OptiManagerApp:
         self.root = root
         self.lang = APP_LANG
         self.txt = APP_STRINGS
-        self.root.title(self.txt.main.window_title_template.format(version=APP_VERSION))
-        screen_w = max(1, int(self.root.winfo_screenwidth() or WINDOW_W))
-        screen_h = max(1, int(self.root.winfo_screenheight() or WINDOW_H))
-        target_w = min(WINDOW_W, max(WINDOW_MIN_W, screen_w - 40))
-        target_h = min(WINDOW_H, max(WINDOW_MIN_H, screen_h - 80))
-        self._startup_window_workaround_active = _should_apply_umpc_window_workaround(
-            screen_w,
-            screen_h,
-            target_w,
-            target_h,
-        )
-        if self._startup_window_workaround_active:
-            target_w, target_h = _get_umpc_startup_window_size(screen_w, screen_h, target_w, target_h)
-        self._startup_window_width = target_w
-        self._startup_window_height = target_h
+        self._configure_startup_window()
+        self._initialize_runtime_state()
+        self._initialize_controller_slots()
+        self._initialize_infra()
+        self._initialize_presenters()
+        self._initialize_ui_and_controllers()
+        self._start_background_services()
+        self._bind_root_events()
 
-        if self._startup_window_workaround_active:
-            self.root.geometry(_build_centered_window_geometry(screen_w, screen_h, target_w, target_h))
-        else:
-            self.root.geometry(f"{target_w}x{target_h}")
-        self.root.minsize(target_w, target_h)
-        self.root.update_idletasks()
-        self.root.state("normal")
-        self.root.overrideredirect(False)
-        self.root.resizable(True, True)
-        if self._startup_window_workaround_active:
-            logging.info(
-                "[APP] Enabling UMPC startup window workaround (screen=%sx%s, target=%sx%s)",
-                screen_w,
-                screen_h,
-                target_w,
-                target_h,
-            )
-        self._poster_target_width, self._poster_target_height, self._poster_target_scale = _resolve_startup_poster_target_size(
-            self.root
+    def _configure_startup_window(self) -> None:
+        self.root.title(self.txt.main.window_title_template.format(version=APP_VERSION))
+        startup_layout = build_startup_window_layout(
+            self.root,
+            window_width=WINDOW_W,
+            window_height=WINDOW_H,
+            window_min_width=WINDOW_MIN_W,
+            window_min_height=WINDOW_MIN_H,
+            card_width=CARD_W,
+            card_height=CARD_H,
+            default_poster_scale=DEFAULT_POSTER_SCALE,
         )
+        self._startup_window_workaround_active = startup_layout.workaround_active
+        self._startup_window_width = startup_layout.window_width
+        self._startup_window_height = startup_layout.window_height
+        apply_startup_window_layout(self.root, startup_layout, logger=logging.getLogger())
+        self._poster_target_width = startup_layout.poster_target_width
+        self._poster_target_height = startup_layout.poster_target_height
+        self._poster_target_scale = startup_layout.poster_target_scale
         logging.info(
             "[APP] Poster target size resolved from widget scale %.2f -> %sx%s",
             self._poster_target_scale,
@@ -543,47 +440,56 @@ class OptiManagerApp:
             self._poster_target_height,
         )
 
+    def _initialize_runtime_state(self) -> None:
         self.game_folder = ""
         runtime_state_bundle = build_runtime_state_bundle(
             checking_gpu_text=self.txt.main.checking_gpu,
             default_sheet_gid=SHEET_GID,
         )
         self.archive_state = runtime_state_bundle.archive_state
+        self.gpu_state = runtime_state_bundle.gpu_state
+        self.sheet_state = runtime_state_bundle.sheet_state
+        self.install_state = runtime_state_bundle.install_state
+        self.card_ui_state = runtime_state_bundle.card_ui_state
         self.optiscaler_cache_dir = OPTISCALER_CACHE_DIR
         self.optiscaler_cache_dir.mkdir(parents=True, exist_ok=True)
         self.fsr4_cache_dir = FSR4_CACHE_DIR
         self.fsr4_cache_dir.mkdir(parents=True, exist_ok=True)
         self.found_exe_list = []
-        self.gpu_state = runtime_state_bundle.gpu_state
-        self.sheet_state = runtime_state_bundle.sheet_state
-        self.install_state = runtime_state_bundle.install_state
-        self.card_ui_state = runtime_state_bundle.card_ui_state
         self.card_frames: list = []
         self.card_items: list = []
+        self._ctk_images: list = []   # keep refs alive
         self._grid_cols_current = GRID_COLS
         self._resize_after_id = None
         self._resize_visual_after_id = None
         self._resize_in_progress = False
         self._last_reflow_width = 0
         self._base_root_width = None
-        self._ctk_images: list = []   # keep refs alive
-        self._app_actions_controller: Optional[AppActionsController] = None
-        self._app_notice_controller: Optional[AppNoticeController] = None
-        self._app_shutdown_controller: Optional[AppShutdownController] = None
-        self._archive_controller: Optional[ArchivePreparationController] = None
-        self._bottom_panel_presenter: Optional[BottomPanelPresenter] = None
-        self._game_db_controller: Optional[GameDbLoadController] = None
-        self._gpu_flow_controller: Optional[GpuFlowController] = None
-        self._header_status_presenter: Optional[HeaderStatusPresenter] = None
-        self._app_controllers: Optional[AppControllers] = None
-        self._install_flow_controller: Optional[InstallFlowController] = None
-        self._card_viewport_controller: Optional[CardViewportController] = None
-        self._card_viewport_runtime: Optional[CardViewportRuntime] = None
-        self._card_render_controller: Optional[CardRenderController] = None
-        self._install_selection_controller: Optional[InstallSelectionController] = None
-        self._scan_entry_controller: Optional[ScanEntryController] = None
-        self._scan_feedback_controller: Optional[ScanFeedbackController] = None
-        self._scan_controller: Optional[ScanController] = None
+        self._games_scrollregion_after_id = None
+        self._games_viewport_after_id = None
+        self._overflow_fit_after_id = None
+
+    def _initialize_controller_slots(self) -> None:
+        self._app_actions_controller = None
+        self._app_notice_controller = None
+        self._app_shutdown_controller = None
+        self._archive_controller = None
+        self._bottom_panel_presenter = None
+        self._game_db_controller = None
+        self._gpu_flow_controller = None
+        self._header_status_presenter = None
+        self._app_controllers = None
+        self._install_flow_controller = None
+        self._card_viewport_controller = None
+        self._card_viewport_runtime = None
+        self._card_ui_controller = None
+        self._card_render_controller = None
+        self._install_selection_controller = None
+        self._scan_entry_controller = None
+        self._scan_feedback_controller = None
+        self._scan_controller = None
+
+    def _initialize_infra(self) -> None:
         self._poster_loader = PosterImageLoader(
             PosterLoaderConfig(
                 cache_dir=COVER_CACHE_DIR,
@@ -633,9 +539,8 @@ class OptiManagerApp:
             on_update_failed=lambda: self._startup_flow.run_post_sheet_startup(True),
             on_exit_requested=self._on_close,
         )
-        self._games_scrollregion_after_id = None
-        self._games_viewport_after_id = None
-        self._overflow_fit_after_id = None
+
+    def _initialize_presenters(self) -> None:
         self._header_status_presenter = HeaderStatusPresenter(
             root=self.root,
             status_text_color=_STATUS_TEXT,
@@ -653,12 +558,19 @@ class OptiManagerApp:
             info_emphasis_color=_STATUS_INDICATOR_WARNING,
             logger=logging.getLogger(),
         )
+
+    def _initialize_ui_and_controllers(self) -> None:
         self.setup_ui()
+        self._create_card_ui_controller()
         self._create_card_viewport_controller()
         self._app_controllers = build_app_controllers(self, APP_CONTROLLER_FACTORY_CONFIG)
         bind_app_controllers(self, self._app_controllers)
+
+    def _start_background_services(self) -> None:
         if self._gpu_flow_controller is not None:
             self._gpu_flow_controller.start_detection()
+
+    def _bind_root_events(self) -> None:
         self.root.bind("<Configure>", self._on_root_resize)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         if self._startup_window_workaround_active:
@@ -667,42 +579,13 @@ class OptiManagerApp:
         self.root.after(250, self._capture_startup_width)
 
     def _apply_startup_window_workaround(self):
-        if not getattr(self, "_startup_window_workaround_active", False):
-            return
-
-        try:
-            screen_w = max(1, int(self.root.winfo_screenwidth() or self._startup_window_width))
-            screen_h = max(1, int(self.root.winfo_screenheight() or self._startup_window_height))
-            current_w = max(1, int(self.root.winfo_width() or self._startup_window_width))
-            current_h = max(1, int(self.root.winfo_height() or self._startup_window_height))
-            state = str(self.root.state() or "").strip().lower()
-            is_effectively_maximized = (
-                state == "zoomed"
-                or current_w >= screen_w - 24
-                or current_h >= screen_h - 24
-            )
-            if not is_effectively_maximized:
-                return
-
-            self.root.overrideredirect(False)
-            self.root.state("normal")
-            self.root.deiconify()
-            self.root.geometry(
-                _build_centered_window_geometry(
-                    screen_w,
-                    screen_h,
-                    self._startup_window_width,
-                    self._startup_window_height,
-                )
-            )
-            self.root.update_idletasks()
-            logging.info(
-                "[APP] Restored startup window from maximized state to %sx%s",
-                self._startup_window_width,
-                self._startup_window_height,
-            )
-        except Exception:
-            logging.debug("[APP] Failed to apply UMPC startup window workaround", exc_info=True)
+        apply_startup_window_workaround(
+            self.root,
+            workaround_active=bool(getattr(self, "_startup_window_workaround_active", False)),
+            window_width=int(getattr(self, "_startup_window_width", WINDOW_W) or WINDOW_W),
+            window_height=int(getattr(self, "_startup_window_height", WINDOW_H) or WINDOW_H),
+            logger=logging.getLogger(),
+        )
 
     def _format_gpu_label_text(self, gpu_info: str) -> str:
         normalized_gpu = str(gpu_info or "").strip() or self.txt.main.unknown_gpu
@@ -843,6 +726,20 @@ class OptiManagerApp:
 
     def _get_card_viewport_controller(self) -> Optional[CardViewportController]:
         return getattr(self, "_card_viewport_controller", None)
+
+    def _get_card_ui_controller(self) -> Optional[GameCardUiController]:
+        return getattr(self, "_card_ui_controller", None)
+
+    def _ensure_card_ui_controller(self) -> Optional[GameCardUiController]:
+        controller = self._get_card_ui_controller()
+        if controller is not None:
+            return controller
+
+        try:
+            self._create_card_ui_controller()
+        except AttributeError:
+            return None
+        return self._get_card_ui_controller()
 
     def _get_install_flow_controller(self) -> Optional[InstallFlowController]:
         controller = getattr(self, "_install_flow_controller", None)
@@ -1150,6 +1047,52 @@ class OptiManagerApp:
         )
         self._sync_card_viewport_runtime_to_app()
 
+    def _create_card_ui_controller(self) -> None:
+        if getattr(self, "_card_ui_controller", None) is not None:
+            return
+
+        card_items = getattr(self, "card_items", None)
+        if card_items is None:
+            self.card_items = []
+            card_items = self.card_items
+
+        image_refs = getattr(self, "_ctk_images", None)
+        if image_refs is None:
+            self._ctk_images = []
+            image_refs = self._ctk_images
+
+        self._card_ui_controller = GameCardUiController(
+            root=getattr(self, "root", None),
+            games_scroll=self.games_scroll,
+            poster_loader=self._poster_loader,
+            poster_queue=self._poster_queue,
+            card_ui_state=self.card_ui_state,
+            card_items=card_items,
+            image_refs=image_refs,
+            callbacks=GameCardUiCallbacks(
+                get_found_games=lambda: tuple(self.found_exe_list),
+                get_grid_column_count=lambda: max(1, int(getattr(self, "_grid_cols_current", GRID_COLS) or GRID_COLS)),
+                get_dynamic_column_count=self._get_dynamic_column_count,
+                get_card_render_controller=lambda: getattr(self, "_card_render_controller", None),
+                select_game=self._set_selected_game,
+                activate_game=lambda index: (self._set_selected_game(index), self.apply_optiscaler()),
+            ),
+            card_width=CARD_W,
+            card_height=CARD_H,
+            card_background=_CARD_BG,
+            title_overlay_background=_CARD_TITLE_OVERLAY_BG,
+            title_overlay_text_color=_CARD_TITLE_OVERLAY_TEXT,
+            title_font_family=FONT_UI,
+            title_height=34,
+            grid_rows_visible=GRID_ROWS_VISIBLE,
+            create_game_card_fn=create_game_card,
+            ensure_card_image_cache_fn=ensure_game_card_image_cache,
+            render_card_visual_fn=render_game_card_visual,
+            update_card_base_image_fn=update_game_card_base_image,
+            compute_visible_indices_fn=compute_visible_game_indices,
+            logger=logging.getLogger(),
+        )
+
     def _pump_poster_queue(self) -> None:
         self._poster_queue.pump()
 
@@ -1251,7 +1194,9 @@ class OptiManagerApp:
     def _apply_selected_game_index(self, index: int) -> None:
         self.card_ui_state.selected_game_index = int(index)
         self._update_selected_game_header()
-        self._refresh_all_card_visuals()
+        controller = self._get_card_ui_controller()
+        if controller is not None:
+            controller.refresh_all_card_visuals()
 
     def _apply_install_selection_state(self, state: InstallSelectionUiState) -> None:
         install_state = self.install_state
@@ -1304,11 +1249,13 @@ class OptiManagerApp:
 
     def _restore_rendered_selection(self, index: int, game: dict) -> None:
         self.card_ui_state.selected_game_index = int(index)
-        self._refresh_all_card_visuals()
+        controller = self._get_card_ui_controller()
+        if controller is not None:
+            controller.refresh_all_card_visuals()
         self._set_information_text(game.get("information", ""))
 
     def _get_effective_widget_scale(self) -> float:
-        return _get_ctk_scale(self.root, 1.0)
+        return get_ctk_scale(self.root, 1.0)
 
     def _get_forced_card_area_width(self) -> int:
         controller = self._get_card_viewport_controller()
@@ -1465,135 +1412,29 @@ class OptiManagerApp:
             return
         return controller._rerender_cards_for_resize()
 
-    def _build_card_visual_theme(self) -> GameCardVisualTheme:
-        return GameCardVisualTheme(
-            card_background=_CARD_BG,
-            card_width=CARD_W,
-            card_height=CARD_H,
-            title_overlay_y=CARD_H - 34,
-        )
-
-    def _ensure_card_image_cache(self, item: dict):
-        ensure_game_card_image_cache(
-            item,
-            theme=self._build_card_visual_theme(),
-            image_refs=self._ctk_images,
-        )
-
-    def _refresh_card_visual(self, index: int):
-        if index < 0 or index >= len(self.card_items):
-            return
-
-        card_ui_state = self.card_ui_state
-        item = self.card_items[index]
-        render_game_card_visual(
-            item,
-            selected=card_ui_state.selected_game_index == index,
-            hovered=card_ui_state.hovered_card_index == index,
-            theme=self._build_card_visual_theme(),
-            image_refs=self._ctk_images,
-        )
-
-    def _refresh_all_card_visuals(self):
-        for i in range(len(self.card_items)):
-            self._refresh_card_visual(i)
-
-    def _set_card_base_image(self, index: int, label: ctk.CTkLabel, pil_img: Image.Image):
-        if index < 0 or index >= len(self.card_items):
-            return
-        item = self.card_items[index]
-        if not update_game_card_base_image(
-            item,
-            label=label,
-            pil_img=pil_img,
-        ):
-            return
-        self._refresh_card_visual(index)
-
-    def _handle_card_hover_enter(self, index: int) -> None:
-        card_ui_state = self.card_ui_state
-        prev = card_ui_state.hovered_card_index
-        card_ui_state.hovered_card_index = int(index)
-        if prev is not None and prev != index:
-            self._refresh_card_visual(prev)
-        self._refresh_card_visual(index)
-
-    def _handle_card_hover_leave(self, index: int) -> None:
-        if self.card_ui_state.hovered_card_index == index:
-            self.card_ui_state.hovered_card_index = None
-        self._refresh_card_visual(index)
-
     def _render_cards(self, keep_selection=False):
-        controller = self._card_render_controller
+        controller = self._ensure_card_ui_controller()
         if controller is None:
             return
-        controller.render_cards(
-            tuple(self.found_exe_list),
-            cols=self._get_dynamic_column_count(),
-            keep_selection=bool(keep_selection),
-            previous_selected_index=self.card_ui_state.selected_game_index if keep_selection else None,
-        )
+        return controller.render_cards(keep_selection=bool(keep_selection))
 
     def _make_card(self, index: int, game: dict) -> ctk.CTkFrame:
-        result = create_game_card(
-            parent=self.games_scroll,
-            index=index,
-            game=game,
-            theme=GameCardTheme(
-                card_width=CARD_W,
-                card_height=CARD_H,
-                card_background=_CARD_BG,
-                title_overlay_background=_CARD_TITLE_OVERLAY_BG,
-                title_overlay_text_color=_CARD_TITLE_OVERLAY_TEXT,
-                title_font_family=FONT_UI,
-                title_wrap_width=CARD_W - 10,
-                title_height=34,
-            ),
-            make_placeholder_image=self._poster_loader.make_placeholder_image,
-            on_select=self._set_selected_game,
-            on_activate=lambda idx: (self._set_selected_game(idx), self.apply_optiscaler()),
-            on_hover_enter=self._handle_card_hover_enter,
-            on_hover_leave=self._handle_card_hover_leave,
-            set_card_placeholder=self._set_card_placeholder,
-            queue_poster=lambda idx, label, title, filename_cover, cover_url: self._poster_queue.queue(
-                idx,
-                label,
-                title,
-                filename_cover,
-                cover_url,
-            ),
-        )
-        self.card_items.append(result.card_item)
-        self._refresh_card_visual(index)
-        return result.card
-
-    def _set_card_placeholder(self, index: int, label: ctk.CTkLabel, title: str):
-        pil_img = self._poster_loader.make_placeholder_image()
-        self.root.after(0, lambda idx=index, l=label, img=pil_img: self._set_card_base_image(idx, l, img))
+        controller = self._ensure_card_ui_controller()
+        if controller is None:
+            raise RuntimeError("Game card UI controller is not available")
+        return controller.make_card(index, game)
 
     def _visible_game_indices(self) -> set:
-        total = len(self.found_exe_list)
-        cols = max(1, self._grid_cols_current)
-        yview_start = None
-        yview_end = None
-
-        try:
-            canvas = getattr(self.games_scroll, "_parent_canvas", None)
-            if canvas is not None:
-                yview_start, yview_end = canvas.yview()
-        except Exception:
-            pass
-
-        return compute_visible_game_indices(
-            total,
-            cols,
-            visible_row_count=GRID_ROWS_VISIBLE,
-            yview_start=yview_start,
-            yview_end=yview_end,
-        )
+        controller = self._ensure_card_ui_controller()
+        if controller is None:
+            return set()
+        return controller.visible_game_indices()
 
     def _apply_loaded_poster(self, index: int, label: ctk.CTkLabel, pil_img: Image.Image):
-        self._set_card_base_image(index, label, pil_img)
+        controller = self._ensure_card_ui_controller()
+        if controller is None:
+            return
+        return controller.apply_loaded_poster(index, label, pil_img)
 
     def _set_selected_game(self, index: int):
         controller = self._install_selection_controller
