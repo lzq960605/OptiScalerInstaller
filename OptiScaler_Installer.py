@@ -50,6 +50,7 @@ from installer.app.scan_controller import ScanController
 from installer.app.scan_entry_controller import ScanEntryController, ScanEntryState
 from installer.app.scan_feedback import ScanFeedbackController
 from installer.app.startup_flow import StartupFlowCallbacks, StartupFlowController
+from installer.app.startup_runtime import StartupRuntimeCoordinator, create_startup_runtime_coordinator
 from installer.app.window_focus import has_startup_foreground_request, request_window_foreground
 from installer.app.startup_window import (
     apply_startup_window_layout,
@@ -454,6 +455,7 @@ class OptiManagerApp:
         self._header_status_presenter = None
         self._app_controllers = None
         self._install_flow_controller = None
+        self._startup_runtime_coordinator = None
         self._card_viewport_controller = None
         self._card_viewport_runtime = None
         self._card_ui_controller = None
@@ -546,6 +548,7 @@ class OptiManagerApp:
         self._sync_card_viewport_runtime_to_app()
         self._app_controllers = build_app_controllers(self, APP_CONTROLLER_FACTORY_CONFIG)
         bind_app_controllers(self, self._app_controllers)
+        self._create_startup_runtime_coordinator()
 
     def _start_background_services(self) -> None:
         if self._gpu_flow_controller is not None:
@@ -712,6 +715,9 @@ class OptiManagerApp:
     def _get_card_ui_controller(self) -> Optional[GameCardUiController]:
         return getattr(self, "_card_ui_controller", None)
 
+    def _get_startup_runtime_coordinator(self) -> Optional[StartupRuntimeCoordinator]:
+        return getattr(self, "_startup_runtime_coordinator", None)
+
     def _get_install_flow_controller(self) -> Optional[InstallFlowController]:
         controller = getattr(self, "_install_flow_controller", None)
         if controller is None and hasattr(self, "root"):
@@ -813,66 +819,22 @@ class OptiManagerApp:
         )
 
     def _on_game_db_loaded(self, result: GameDbLoadResult) -> None:
-        sheet_state = self.sheet_state
-        gpu_state = self.gpu_state
-        sheet_state.loading = False
-        sheet_state.active_gid = int(result.game_db_gid)
-        sheet_state.active_vendor = str(result.game_db_vendor or "default")
-        sheet_state.game_db = result.game_db if result.ok else {}
-        sheet_state.module_download_links = result.module_download_links if result.ok else {}
-
-        sheet_state.status = result.ok
-        if result.ok:
-            logging.info(
-                "[APP] Game DB loaded successfully: vendor=%s, games=%d, module_links=%d",
-                sheet_state.active_vendor,
-                len(sheet_state.game_db),
-                len(sheet_state.module_download_links),
-            )
-        else:
-            logging.error(
-                "[APP] Failed to load Game DB for vendor=%s: %s",
-                sheet_state.active_vendor,
-                result.error,
-            )
-        if gpu_state.multi_gpu_blocked:
-            self._update_install_button_state()
-            self._update_sheet_status()
+        coordinator = self._get_startup_runtime_coordinator()
+        if coordinator is None:
             return
-        self._refresh_optiscaler_archive_info_ui()
-        self._update_install_button_state()
-        self._update_sheet_status()
-        update_started = self.check_app_update() if result.ok else False
-        if not update_started:
-            self._startup_flow.run_post_sheet_startup(result.ok)
+        return coordinator.on_game_db_loaded(result)
 
     def _start_optiscaler_archive_prepare(self):
-        if self._archive_controller is None:
+        coordinator = self._get_startup_runtime_coordinator()
+        if coordinator is None:
             return
-        sheet_state = self.sheet_state
-        entry = sheet_state.module_download_links.get("optiscaler", {})
-        state = self._archive_controller.prepare_optiscaler(entry, self.optiscaler_cache_dir)
-        self._apply_optiscaler_archive_state(state)
-        if state.downloading:
-            self._update_install_button_state()
-            return
-        self._start_fsr4_archive_prepare()
-        self._update_install_button_state()
+        return coordinator.start_optiscaler_archive_prepare()
 
     def _start_fsr4_archive_prepare(self):
-        if self._archive_controller is None:
+        coordinator = self._get_startup_runtime_coordinator()
+        if coordinator is None:
             return
-        enabled = self._should_apply_fsr4_for_game()
-        if not enabled:
-            logging.info("[APP] Skipping FSR4 preparation for GPU: %s", self.gpu_state.gpu_info)
-        entry = self.sheet_state.module_download_links.get("fsr4int8", {})
-        state = self._archive_controller.prepare_fsr4(
-            entry,
-            self.fsr4_cache_dir,
-            enabled=enabled,
-        )
-        self._apply_fsr4_archive_state(state)
-        self._update_install_button_state()
+        return coordinator.start_fsr4_archive_prepare()
 
     def check_app_update(self) -> bool:
         controller = getattr(self, "_app_actions_controller", None)
@@ -909,83 +871,40 @@ class OptiManagerApp:
         return bool(controller and controller.is_scan_in_progress)
 
     def _apply_gpu_flow_state(self, state: GpuFlowState) -> None:
-        gpu_state = self.gpu_state
-        sheet_state = self.sheet_state
-        gpu_state.gpu_context = state.gpu_context
-        gpu_state.gpu_names = list(state.gpu_names or ())
-        gpu_state.gpu_count = max(0, int(state.gpu_count or 0))
-        gpu_state.is_multi_gpu = bool(state.is_multi_gpu)
-        gpu_state.multi_gpu_blocked = bool(state.multi_gpu_blocked)
-        gpu_state.gpu_selection_pending = bool(state.gpu_selection_pending)
-        gpu_state.selected_adapter = state.selected_adapter
-
-        if state.game_db_vendor is not None:
-            sheet_state.active_vendor = str(state.game_db_vendor or "default")
-        if state.game_db_gid is not None:
-            sheet_state.active_gid = int(state.game_db_gid or SHEET_GID)
-
-        gpu_state.gpu_info = str(state.gpu_info or self.txt.main.unknown_gpu).strip() or self.txt.main.unknown_gpu
-        if hasattr(self, "gpu_lbl") and self.gpu_lbl:
-            self.gpu_lbl.configure(text=self._format_gpu_label_text(gpu_state.gpu_info))
+        coordinator = self._get_startup_runtime_coordinator()
+        if coordinator is None:
+            return
+        return coordinator.apply_gpu_flow_state(state)
 
     def _handle_unsupported_gpu_block(self, scan_status_message: str, info_text: str) -> None:
-        sheet_state = self.sheet_state
-        install_state = self.install_state
-        card_ui_state = self.card_ui_state
-        self._startup_flow.mark_post_sheet_startup_done()
-        sheet_state.loading = False
-        sheet_state.status = False
-        sheet_state.game_db = {}
-        sheet_state.module_download_links = {}
-        self.found_exe_list = []
-        card_ui_state.selected_game_index = None
-        install_state.popup_confirmed = False
-        install_state.precheck_running = False
-        install_state.precheck_ok = False
-        install_state.precheck_error = ""
-        install_state.precheck_dll_name = ""
-        self._apply_install_selection_state(
-            InstallSelectionUiState(
-                popup_confirmed=False,
-                precheck_running=False,
-                precheck_ok=False,
-            )
-        )
-
-        if hasattr(self, "btn_select_folder") and self.btn_select_folder:
-            self.btn_select_folder.configure(state="disabled")
-        self._set_scan_status_message(scan_status_message, "#FF8A8A")
-        self._clear_cards()
-        if hasattr(self, "info_text") and self.info_text:
-            self._set_information_text(info_text)
-        self._update_selected_game_header()
-        self._update_sheet_status()
-        self._update_install_button_state()
+        coordinator = self._get_startup_runtime_coordinator()
+        if coordinator is None:
+            return
+        return coordinator.handle_unsupported_gpu_block(scan_status_message, info_text)
 
     def _apply_optiscaler_archive_state(self, state: ArchivePreparationState) -> None:
-        archive_state = self.archive_state
-        archive_state.optiscaler_filename = str(state.filename or "")
-        archive_state.optiscaler_ready = bool(state.ready)
-        archive_state.optiscaler_downloading = bool(state.downloading)
-        archive_state.optiscaler_error = str(state.error_message or "")
-        archive_state.opti_source_archive = str(state.archive_path or "")
+        coordinator = self._get_startup_runtime_coordinator()
+        if coordinator is None:
+            return
+        return coordinator.apply_optiscaler_archive_state(state)
 
     def _apply_fsr4_archive_state(self, state: ArchivePreparationState) -> None:
-        archive_state = self.archive_state
-        archive_state.fsr4_filename = str(state.filename or "")
-        archive_state.fsr4_ready = bool(state.ready)
-        archive_state.fsr4_downloading = bool(state.downloading)
-        archive_state.fsr4_error = str(state.error_message or "")
-        archive_state.fsr4_source_archive = str(state.archive_path or "")
+        coordinator = self._get_startup_runtime_coordinator()
+        if coordinator is None:
+            return
+        return coordinator.apply_fsr4_archive_state(state)
 
     def _on_optiscaler_archive_state_changed(self, state: ArchivePreparationState) -> None:
-        self._apply_optiscaler_archive_state(state)
-        self._start_fsr4_archive_prepare()
-        self._update_install_button_state()
+        coordinator = self._get_startup_runtime_coordinator()
+        if coordinator is None:
+            return
+        return coordinator.on_optiscaler_archive_state_changed(state)
 
     def _on_fsr4_archive_state_changed(self, state: ArchivePreparationState) -> None:
-        self._apply_fsr4_archive_state(state)
-        self._update_install_button_state()
+        coordinator = self._get_startup_runtime_coordinator()
+        if coordinator is None:
+            return
+        return coordinator.on_fsr4_archive_state_changed(state)
 
     def _create_card_viewport_controller(self) -> None:
         runtime, controller = create_card_viewport_bundle(self, UI_CONTROLLER_FACTORY_CONFIG)
@@ -997,6 +916,14 @@ class OptiManagerApp:
         if getattr(self, "_card_ui_controller", None) is not None:
             return
         self._card_ui_controller = create_card_ui_controller(self, UI_CONTROLLER_FACTORY_CONFIG)
+
+    def _create_startup_runtime_coordinator(self) -> None:
+        if getattr(self, "_startup_runtime_coordinator", None) is not None:
+            return
+        self._startup_runtime_coordinator = create_startup_runtime_coordinator(
+            self,
+            default_sheet_gid=SHEET_GID,
+        )
 
     def _pump_poster_queue(self) -> None:
         self._poster_queue.pump()
