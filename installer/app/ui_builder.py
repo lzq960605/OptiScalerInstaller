@@ -186,7 +186,7 @@ def _build_grid_area(app: Any, theme: MainUiTheme) -> None:
 
     app.lbl_selected_game_header = ctk.CTkLabel(
         selected_header_row,
-        text=app._get_selected_game_header_text(),
+        text="",
         font=ctk.CTkFont(family=theme.font_ui, size=12, weight="bold"),
         text_color=theme.selected_game_highlight_color,
         anchor="e",
@@ -204,7 +204,6 @@ def _build_grid_area(app: Any, theme: MainUiTheme) -> None:
         corner_radius=0,
     )
     app.games_scroll.grid(row=1, column=0, sticky="nsew", padx=0, pady=(0, 8))
-    app._configure_card_columns(app._grid_cols_current)
 
     app.empty_label = ctk.CTkLabel(
         app.games_scroll,

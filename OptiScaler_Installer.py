@@ -433,7 +433,6 @@ class OptiManagerApp:
         self.card_frames: list = []
         self.card_items: list = []
         self._ctk_images: list = []   # keep refs alive
-        self._grid_cols_current = GRID_COLS
 
     def _initialize_infra(self) -> None:
         self._initialize_poster_infra()
@@ -519,6 +518,8 @@ class OptiManagerApp:
         self._app_controllers = build_app_controllers(self, APP_CONTROLLER_FACTORY_CONFIG)
         bind_app_controllers(self, self._app_controllers)
         self._create_ui_shell()
+        self._configure_card_columns(GRID_COLS)
+        self._update_selected_game_header()
         self._create_startup_runtime_coordinator()
 
     def _bind_viewport_scroll_events(self) -> None:
@@ -630,12 +631,7 @@ class OptiManagerApp:
     def _get_selected_game_header_text(self) -> str:
         shell = self._get_ui_shell()
         if shell is None:
-            selection = build_selected_game_snapshot(
-                self.found_exe_list,
-                self.card_ui_state.selected_game_index,
-                getattr(self, "lang", "en"),
-            )
-            return selection.header_text
+            return ""
         return shell.get_selected_game_header_text()
 
     def _update_selected_game_header(self):
@@ -1036,17 +1032,7 @@ class OptiManagerApp:
         return self._card_viewport_controller._max_safe_columns_for_width(usable_w)
 
     def _configure_card_columns(self, cols: int):
-        controller = getattr(self, "_card_viewport_controller", None)
-        if controller is None:
-            normalized_cols = max(1, int(cols))
-            max_cols = max(int(getattr(self, "_grid_cols_current", GRID_COLS)), normalized_cols)
-            for col in range(max_cols):
-                self.games_scroll.grid_columnconfigure(col, weight=0, minsize=0)
-            for col in range(normalized_cols):
-                self.games_scroll.grid_columnconfigure(col, weight=0, minsize=CARD_W)
-            self._grid_cols_current = normalized_cols
-            return
-        return controller._configure_card_columns(cols)
+        return self._card_viewport_controller._configure_card_columns(cols)
 
     def _refresh_games_scrollregion(self):
         return self._card_viewport_controller._refresh_games_scrollregion()
