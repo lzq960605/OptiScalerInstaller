@@ -885,6 +885,8 @@ class OptiManagerApp:
         """Kick off a silent auto-scan of known Steam/game directories."""
         if self.gpu_state.multi_gpu_blocked:
             return
+        if self.install_state.in_progress:
+            return
         if getattr(self, "_scan_controller", None) is None:
             return
         self._scan_controller.start_auto_scan()
@@ -894,6 +896,8 @@ class OptiManagerApp:
 
     def _start_manual_scan_from_folder(self, folder_path: str) -> bool:
         if getattr(self, "_scan_controller", None) is None:
+            return False
+        if self.install_state.in_progress:
             return False
         return self._scan_controller.start_manual_scan(folder_path)
 
@@ -1067,6 +1071,8 @@ class OptiManagerApp:
         controller = getattr(self, "_install_selection_controller", None)
         if controller is None:
             return
+        if self.install_state.in_progress:
+            return
         controller.select_game(index, tuple(self.found_exe_list))
 
     def _run_install_precheck(self, game_data: dict) -> InstallSelectionPrecheckOutcome:
@@ -1094,6 +1100,8 @@ class OptiManagerApp:
     def select_game_folder(self):
         controller = getattr(self, "_scan_entry_controller", None)
         if controller is None:
+            return
+        if self.install_state.in_progress:
             return
         controller.select_game_folder(self._build_scan_entry_state())
 
