@@ -76,6 +76,7 @@ def _apply_popup_geometry(
 
         if desired_popup_w is not None:
             popup_w = max(popup_w, int(desired_popup_w))
+        popup_w = max(popup_w, min_popup_w)
 
         margin = 12
         if popup_w + (margin * 2) > screen_w:
@@ -194,12 +195,17 @@ def show_message_popup(
         min(max_text_chars, max(min_text_chars, (screen_w - 140) // max(1, avg_char_width))),
     )
     if preferred_text_chars is None:
-        if desired_popup_w is not None:
-            target_text_px = max(220, desired_popup_w - 72)
-            preferred_width = int(math.ceil(target_text_px / max(1, zero_char_width)))
-            preferred_text_chars = max(min_text_chars, min(capped_max_text_chars, preferred_width))
-        else:
-            preferred_text_chars = min_text_chars
+        longest_line_px = max(
+            (max(normal_font.measure(line), emphasis_font.measure(line)) for line in plain_text.splitlines() if line),
+            default=0,
+        )
+        # Use screen-width cap only (not max_text_chars) so auto-sized popups are never
+        # forced to wrap just because the text is wider than the artificial char limit.
+        auto_max_chars = max(min_text_chars, (screen_w - 80) // max(1, avg_char_width))
+        container_margin_px = 44  # padx=22 on both sides of container
+        extra_buffer_px = 40  # tk.Text internal border + word-wrap safety margin
+        ideal_chars = max(min_text_chars, int(math.ceil((longest_line_px + container_margin_px + extra_buffer_px) / max(1, zero_char_width))))
+        preferred_text_chars = min(ideal_chars, auto_max_chars)
     preferred_text_chars = max(min_text_chars, int(preferred_text_chars))
     capped_max_text_chars = max(preferred_text_chars, capped_max_text_chars)
     width_steps = _build_width_steps(preferred_text_chars, capped_max_text_chars)
@@ -223,6 +229,12 @@ def show_message_popup(
             chosen_width = width_chars
             if popup.winfo_reqheight() <= max_popup_h:
                 break
+        popup.update_idletasks()
+        if popup.winfo_reqheight() > max_popup_h:
+            chrome_height = max(0, popup.winfo_reqheight() - message_widget.winfo_reqheight())
+            max_text_height_px = max(96, max_popup_h - chrome_height)
+            max_visible_lines = max(4, int(max_text_height_px / max(1, line_height_px)))
+            resolved_line_count = min(resolved_line_count, max_visible_lines)
         message_widget.configure(width=chosen_width, height=resolved_line_count)
 
     def _layout_scrollable_message() -> None:
@@ -272,9 +284,26 @@ def show_message_popup(
         except Exception:
             logging.debug("Failed to reflow %s text", debug_name, exc_info=True)
 
+    def _sync_non_scrollable_message_height() -> None:
+        try:
+            popup.update_idletasks()
+            actual_width_px = int(message_widget.winfo_width() or 0)
+            if actual_width_px <= 1:
+                return
+            actual_line_count = estimate_wrapped_text_lines(plain_text, normal_font, actual_width_px)
+            # +1 safety buffer: font rendering differences can cause off-by-one vs estimation
+            target_lines = actual_line_count + 1
+            if int(message_widget.cget("height")) != target_lines:
+                message_widget.configure(height=target_lines)
+                popup.update_idletasks()
+        except Exception:
+            logging.debug("Failed to sync non-scrollable %s height", debug_name, exc_info=True)
+
     def _apply_current_popup_geometry(use_requested_size: bool = False) -> None:
         if scrollable:
             _sync_scrollable_message_height()
+        else:
+            _sync_non_scrollable_message_height()
         _apply_popup_geometry(
             root,
             popup,
@@ -335,7 +364,7 @@ def show_message_popup(
         popup,
         initial_layout=_initial_layout,
         post_show_layout=_apply_current_popup_geometry if scrollable else None,
-        after_idle_layout=_apply_current_popup_geometry,
+        after_idle_layout=_apply_current_popup_geometry if scrollable else (lambda: _apply_current_popup_geometry(use_requested_size=True)),
         fade_controller=fade_controller,
     )
     popup.wait_window()
