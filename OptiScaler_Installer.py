@@ -6,6 +6,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from tkinter import messagebox
 import logging
+import logging.handlers
 import sys
 from pathlib import Path
 import re
@@ -175,8 +176,6 @@ OPTIPATCHER_URL = os.environ.get(
     "OPTIPATCHER_URL",
     "https://github.com/optiscaler/OptiPatcher/releases/latest/download/OptiPatcher.asi",
 )
-
-import logging.handlers
 
 
 class PrefixedLoggerAdapter(logging.LoggerAdapter):
