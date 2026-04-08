@@ -11,6 +11,7 @@ def install_optipatcher(
     module_download_links: Mapping[str, object],
     default_url: str,
     logger=None,
+    cached_archive_path: str = "",
 ) -> dict[str, str]:
     if not bool(game_data.get("optipatcher")):
         return {}
@@ -22,7 +23,10 @@ def install_optipatcher(
     if isinstance(opti_link_entry, dict):
         opti_url = str(opti_link_entry.get("url", opti_url) or opti_url).strip()
 
-    installer_services.install_optipatcher(target_path, url=opti_url, logger=logger)
+    installer_services.install_optipatcher(target_path, url=opti_url, logger=logger, cached_archive_path=cached_archive_path)
     if logger:
-        logger.info("Installed OptiPatcher from %s to %s", opti_url, target_path)
+        if cached_archive_path:
+            logger.info("Installed OptiPatcher from cached archive %s to %s", cached_archive_path, target_path)
+        else:
+            logger.info("Installed OptiPatcher from %s to %s", opti_url, target_path)
     return {"LoadAsiPlugins": "True"}

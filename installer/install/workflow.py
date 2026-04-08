@@ -27,6 +27,7 @@ class InstallContext:
     final_dll_name: str
     fsr4_source_archive: str
     fsr4_required: bool
+    ual_detected_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -49,8 +50,12 @@ def build_install_context(
     resolved_dll_name: str,
     fsr4_source_archive: str,
     fsr4_required: bool,
-    logger,
+    ual_detected_names: tuple[str, ...] | None = None,
+    logger=None,
 ) -> InstallContext:
+    if logger is None:
+        import logging
+        logger = logging.getLogger()
     handler = get_game_handler(game_data)
     logger.info("Using game handler: %s", getattr(handler, "handler_key", "default"))
 
@@ -59,7 +64,9 @@ def build_install_context(
     planned_source_archive = str(install_plan.source_archive or source_archive)
     planned_resolved_dll_name = str(install_plan.resolved_dll_name or resolved_dll_name)
     target_path = planned_game_data["path"]
-    use_ultimate_asi_loader = bool(planned_game_data.get("ultimate_asi_loader"))
+    ual_names = tuple(ual_detected_names or ())
+    ual_auto_detected = bool(ual_names)
+    use_ultimate_asi_loader = bool(planned_game_data.get("ultimate_asi_loader")) or ual_auto_detected
 
     if use_ultimate_asi_loader and planned_game_data.get("reframework_url"):
         raise RuntimeError(
@@ -67,8 +74,13 @@ def build_install_context(
         )
 
     if use_ultimate_asi_loader:
-        final_dll_name = planned_resolved_dll_name or OPTISCALER_ASI_NAME
-        logger.info("Install mode: Ultimate ASI Loader (%s)", final_dll_name)
+        if ual_auto_detected:
+            # Auto-detect mode: OptiScaler must always install as OptiScaler.asi
+            final_dll_name = OPTISCALER_ASI_NAME
+            logger.info("Install mode: Ultimate ASI Loader (auto-detected, forced to %s)", final_dll_name)
+        else:
+            final_dll_name = planned_resolved_dll_name or OPTISCALER_ASI_NAME
+            logger.info("Install mode: Ultimate ASI Loader (%s)", final_dll_name)
     else:
         final_dll_name = installer_services.resolve_proxy_dll_name(
             target_path,
@@ -85,6 +97,7 @@ def build_install_context(
         final_dll_name=final_dll_name,
         fsr4_source_archive=str(fsr4_source_archive or ""),
         fsr4_required=bool(fsr4_required),
+        ual_detected_names=ual_names,
     )
 
 
@@ -96,6 +109,10 @@ def run_install_workflow(
     gpu_info: Any,
     callbacks: InstallWorkflowCallbacks,
     logger,
+    *,
+    ual_cached_archive: str = "",
+    optipatcher_cached_archive: str = "",
+    unreal5_cached_archive: str = "",
 ) -> dict[str, Any]:
     logger.info("Install started: target=%s", install_ctx.target_path)
     exclude_patterns = resolve_install_exclude_patterns(module_download_links)
@@ -112,7 +129,14 @@ def run_install_workflow(
         raise FileNotFoundError("OptiScaler.ini not found after installation")
 
     if install_ctx.use_ultimate_asi_loader:
-        install_ultimate_asi_loader(install_ctx.target_path, module_download_links, logger=logger)
+        ual_names = install_ctx.ual_detected_names if install_ctx.ual_detected_names else None
+        install_ultimate_asi_loader(
+            install_ctx.target_path,
+            module_download_links,
+            ual_detected_names=ual_names,
+            logger=logger,
+            cached_archive_path=ual_cached_archive,
+        )
 
     merged_ini_settings = dict(install_ctx.game_data.get("ini_settings", {}))
     install_reframework_dinput8(install_ctx.target_path, install_ctx.game_data, logger=logger)
@@ -123,6 +147,7 @@ def run_install_workflow(
             module_download_links,
             str(optipatcher_url or ""),
             logger=logger,
+            cached_archive_path=optipatcher_cached_archive,
         )
     )
 
@@ -138,6 +163,7 @@ def run_install_workflow(
         module_download_links,
         gpu_info,
         logger=logger,
+        cached_archive_path=unreal5_cached_archive,
     )
 
     if install_ctx.fsr4_required:

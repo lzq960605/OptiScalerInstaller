@@ -28,7 +28,7 @@ class InstallFlowCallbacks:
     get_lang: Callable[[], str]
     should_apply_fsr4_for_game: Callable[[Mapping[str, Any]], bool]
     update_install_button_state: Callable[[], None]
-    install_worker_entry: Callable[[Mapping[str, Any], str, str, str, bool], None]
+    install_worker_entry: Callable[..., None]
     finish_install: Callable[[bool, str, Mapping[str, Any] | None], None]
     show_after_install_popup: Callable[[Mapping[str, Any]], None]
     show_info: Callable[[str, str], None]
@@ -94,6 +94,20 @@ class InstallFlowController:
             if precheck.ok:
                 resolved_dll_name = str(precheck.resolved_dll_name or "")
                 logger.info("Install precheck resolved DLL name: %s", resolved_dll_name)
+
+                ual_detected_names: tuple[str, ...] = ()
+                for finding in conflict_findings:
+                    if str(getattr(finding, "kind", "") or "").strip().lower() == "ultimate_asi_loader":
+                        ual_detected_names = tuple(
+                            str(item).strip()
+                            for item in (getattr(finding, "evidence", ()) or ())
+                            if str(item).strip()
+                        )
+                        break
+                self._install_state.precheck_ual_detected_names = ual_detected_names
+                if ual_detected_names:
+                    logger.info("[UAL] Detected UAL DLL(s): %s", ", ".join(ual_detected_names))
+
                 return InstallSelectionPrecheckOutcome(
                     ok=True,
                     resolved_dll_name=resolved_dll_name,
@@ -121,23 +135,33 @@ class InstallFlowController:
             self._card_ui_state.selected_game_index,
             self._callbacks.get_lang(),
         )
+        archive = self._archive_state
+        predownload_in_progress = bool(
+            archive.optipatcher_downloading
+            or archive.ual_downloading
+            or archive.unreal5_downloading
+        )
         return build_install_entry_state(
             selection=selection,
             multi_gpu_blocked=bool(self._gpu_state.multi_gpu_blocked),
             install_in_progress=bool(self._install_state.in_progress),
-            optiscaler_archive_downloading=bool(self._archive_state.optiscaler_downloading),
+            optiscaler_archive_downloading=bool(archive.optiscaler_downloading),
             install_precheck_running=bool(self._install_state.precheck_running),
             install_precheck_ok=bool(self._install_state.precheck_ok),
             install_precheck_error=str(self._install_state.precheck_error or ""),
             install_precheck_dll_name=str(self._install_state.precheck_dll_name or ""),
-            optiscaler_archive_ready=bool(self._archive_state.optiscaler_ready),
-            opti_source_archive=str(self._archive_state.opti_source_archive or ""),
-            optiscaler_archive_error=str(self._archive_state.optiscaler_error or ""),
-            fsr4_archive_downloading=bool(self._archive_state.fsr4_downloading),
-            fsr4_archive_ready=bool(self._archive_state.fsr4_ready),
-            fsr4_source_archive=str(self._archive_state.fsr4_source_archive or ""),
-            fsr4_archive_error=str(self._archive_state.fsr4_error or ""),
+            optiscaler_archive_ready=bool(archive.optiscaler_ready),
+            opti_source_archive=str(archive.opti_source_archive or ""),
+            optiscaler_archive_error=str(archive.optiscaler_error or ""),
+            fsr4_archive_downloading=bool(archive.fsr4_downloading),
+            fsr4_archive_ready=bool(archive.fsr4_ready),
+            fsr4_source_archive=str(archive.fsr4_source_archive or ""),
+            fsr4_archive_error=str(archive.fsr4_error or ""),
             game_popup_confirmed=bool(self._install_state.popup_confirmed),
+            predownload_in_progress=predownload_in_progress,
+            ual_cached_archive=str(archive.ual_source_archive or "") if archive.ual_ready else "",
+            optipatcher_cached_archive=str(archive.optipatcher_source_archive or "") if archive.optipatcher_ready else "",
+            unreal5_cached_archive=str(archive.unreal5_source_archive or "") if archive.unreal5_ready else "",
         )
 
     def show_install_entry_rejection(self, decision: InstallEntryDecision) -> None:
@@ -146,6 +170,10 @@ class InstallFlowController:
 
         if decision.code == "install_in_progress":
             self._callbacks.show_info(self._txt.dialogs.installing_title, self._txt.dialogs.installing_body)
+            return
+
+        if decision.code == "predownload_in_progress":
+            self._callbacks.show_info(self._txt.dialogs.preparing_download_title, self._txt.dialogs.preparing_download_body)
             return
 
         if decision.code == "no_game_selected":
@@ -196,6 +224,9 @@ class InstallFlowController:
         source_archive = decision.source_archive
         resolved_dll_name = decision.resolved_dll_name
         fsr4_source_archive = decision.fsr4_source_archive
+        ual_cached_archive = decision.ual_cached_archive
+        optipatcher_cached_archive = decision.optipatcher_cached_archive
+        unreal5_cached_archive = decision.unreal5_cached_archive
 
         self._install_state.in_progress = True
         self._callbacks.update_install_button_state()
@@ -206,6 +237,9 @@ class InstallFlowController:
             resolved_dll_name,
             fsr4_source_archive,
             decision.fsr4_required,
+            ual_cached_archive,
+            optipatcher_cached_archive,
+            unreal5_cached_archive,
         )
 
     def run_install_worker(
@@ -215,10 +249,14 @@ class InstallFlowController:
         resolved_dll_name: str,
         fsr4_source_archive: str,
         fsr4_required: bool,
+        ual_cached_archive: str = "",
+        optipatcher_cached_archive: str = "",
+        unreal5_cached_archive: str = "",
     ) -> None:
         game_name = str(game_data.get("game_name", "unknown")).strip() or "unknown"
         logger = self._create_prefixed_logger(game_name)
         try:
+            ual_detected_names = tuple(self._install_state.precheck_ual_detected_names or ())
             install_ctx = build_install_context(
                 self._app_ref,
                 game_data,
@@ -226,6 +264,7 @@ class InstallFlowController:
                 resolved_dll_name,
                 fsr4_source_archive,
                 fsr4_required,
+                ual_detected_names,
                 logger,
             )
             installed_game = run_install_workflow(
@@ -236,6 +275,9 @@ class InstallFlowController:
                 self._gpu_state.gpu_info,
                 create_install_workflow_callbacks(),
                 logger,
+                ual_cached_archive=ual_cached_archive,
+                optipatcher_cached_archive=optipatcher_cached_archive,
+                unreal5_cached_archive=unreal5_cached_archive,
             )
             self._root.after(
                 0,

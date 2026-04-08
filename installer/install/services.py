@@ -31,6 +31,7 @@ OPTISCALER_PROXY_DLL_NAMES = {
 }
 OPTISCALER_BACKUP_DLL_NAMES = (
     OPTISCALER_DLL,
+    "OptiScaler.asi",
     *tuple(sorted(OPTISCALER_PROXY_DLL_NAMES, key=str.lower)),
 )
 # Legacy OptiScaler-side compatibility cleanup targets.
@@ -38,7 +39,6 @@ OPTISCALER_BACKUP_DLL_NAMES = (
 OPTISCALER_LEGACY_REMOVE_NAMES = {
     "nvapi64.dll",
     "nvngx.dll",
-    "OptiScaler.asi",
 }
 OPTISCALER_PROXY_FALLBACK_NAMES = ("winmm.dll", "version.dll")
 OPTIPATCHER_PLUGIN_NAME = "OptiPatcher.asi"
@@ -582,7 +582,7 @@ def _remove_existing_optipatcher_plugins(plugins_dir: Path, logger=None) -> None
             logging.info(message)
 
 
-def install_optipatcher(target_path, url, logger=None):
+def install_optipatcher(target_path, url, logger=None, cached_archive_path=""):
     target_dir = Path(str(target_path or "").strip())
     if not target_dir.is_dir():
         raise ValueError(f"Invalid target folder: {target_path}")
@@ -590,14 +590,20 @@ def install_optipatcher(target_path, url, logger=None):
     plugins_dir = target_dir / "plugins"
     plugins_dir.mkdir(parents=True, exist_ok=True)
     destination_path = plugins_dir / OPTIPATCHER_PLUGIN_NAME
-    download_name = _resolve_optipatcher_download_name(url)
+
+    cached = Path(str(cached_archive_path or "").strip()) if cached_archive_path else None
+    use_cache = cached is not None and cached.is_file()
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
-        download_path = tmpdir_path / download_name
-        extract_dir = tmpdir_path / "payload"
+        if use_cache:
+            download_path = cached
+        else:
+            download_name = _resolve_optipatcher_download_name(url)
+            download_path = tmpdir_path / download_name
+            download_to_file(url, str(download_path), timeout=30, logger=logger)
 
-        download_to_file(url, str(download_path), timeout=30, logger=logger)
+        extract_dir = tmpdir_path / "payload"
         payload_path = _resolve_optipatcher_payload(download_path, extract_dir, logger=logger)
 
         _remove_existing_optipatcher_plugins(plugins_dir, logger=logger)
@@ -610,15 +616,19 @@ def install_optipatcher(target_path, url, logger=None):
         logger.info("OptiPatcher installed to %s", destination_path)
 
 
-def install_unreal5_from_url(url, target_path, logger=None):
-    parsed = urlparse(url)
-    file_name = os.path.basename(parsed.path)
-    ext = os.path.splitext(file_name)[1].lower()
-    if ext not in {".zip", ".7z"}:
-        msg = f"Unreal5 URL must point to .zip or .7z archive: {url}"
-        if logger:
-            logger.error(msg)
-        raise ValueError(msg)
+def install_unreal5_from_url(url, target_path, logger=None, cached_archive_path=""):
+    cached = Path(str(cached_archive_path or "").strip()) if cached_archive_path else None
+    use_cache = cached is not None and cached.is_file()
+
+    if not use_cache:
+        parsed = urlparse(url)
+        file_name = os.path.basename(parsed.path)
+        ext = os.path.splitext(file_name)[1].lower()
+        if ext not in {".zip", ".7z"}:
+            msg = f"Unreal5 URL must point to .zip or .7z archive: {url}"
+            if logger:
+                logger.error(msg)
+            raise ValueError(msg)
 
     if target_has_filename(target_path, "dxgi.dll"):
         if logger:
@@ -626,11 +636,14 @@ def install_unreal5_from_url(url, target_path, logger=None):
         return False
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        archive_path = str(Path(tmpdir) / (file_name or f"unreal5_patch{ext}"))
-        download_to_file(url, archive_path, timeout=60, logger=logger)
+        if use_cache:
+            archive_path = str(cached)
+        else:
+            archive_path = str(Path(tmpdir) / (file_name or f"unreal5_patch{ext}"))
+            download_to_file(url, archive_path, timeout=60, logger=logger)
         extract_archive(archive_path, target_path, logger=logger)
         if logger:
-            logger.info("Unreal5 patch installed from URL: %s", url)
+            logger.info("Unreal5 patch installed from %s", cached_archive_path or url)
     return True
 
 

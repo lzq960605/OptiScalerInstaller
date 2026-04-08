@@ -1,10 +1,15 @@
 from .optipatcher import install_optipatcher
 from .reframework import install_reframework_dinput8
-from .ultimate_asi_loader import OPTISCALER_ASI_NAME, install_ultimate_asi_loader
+from .ultimate_asi_loader import (
+    OPTISCALER_ASI_NAME,
+    _resolve_ual_representative_name,
+    install_ultimate_asi_loader,
+)
 from .unreal5 import install_unreal5_patch
 
 __all__ = [
     "OPTISCALER_ASI_NAME",
+    "_resolve_ual_representative_name",
     "install_optipatcher",
     "install_reframework_dinput8",
     "install_ultimate_asi_loader",

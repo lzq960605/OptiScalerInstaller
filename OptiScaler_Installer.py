@@ -283,6 +283,9 @@ LOCAL_APPDATA_DIR = Path(os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()
 APP_CACHE_DIR = LOCAL_APPDATA_DIR / "OptiScalerInstaller"
 OPTISCALER_CACHE_DIR = APP_CACHE_DIR / "cache" / "optiscaler"
 FSR4_CACHE_DIR = APP_CACHE_DIR / "cache" / "fsr4"
+OPTIPATCHER_CACHE_DIR = APP_CACHE_DIR / "cache" / "optipatcher"
+UAL_CACHE_DIR = APP_CACHE_DIR / "cache" / "ultimateasiloader"
+UNREAL5_CACHE_DIR = APP_CACHE_DIR / "cache" / "unreal5"
 COVER_CACHE_DIR = APP_CACHE_DIR / "cache" / "covers"
 COVERS_REPO_RAW_BASE_URL = str(
     os.environ.get(
@@ -430,6 +433,13 @@ class OptiManagerApp:
         self.optiscaler_cache_dir.mkdir(parents=True, exist_ok=True)
         self.fsr4_cache_dir = FSR4_CACHE_DIR
         self.fsr4_cache_dir.mkdir(parents=True, exist_ok=True)
+        self.optipatcher_cache_dir = OPTIPATCHER_CACHE_DIR
+        self.optipatcher_cache_dir.mkdir(parents=True, exist_ok=True)
+        self.ual_cache_dir = UAL_CACHE_DIR
+        self.ual_cache_dir.mkdir(parents=True, exist_ok=True)
+        self.unreal5_cache_dir = UNREAL5_CACHE_DIR
+        self.unreal5_cache_dir.mkdir(parents=True, exist_ok=True)
+        self.manifest_root = APP_CACHE_DIR
         self.found_exe_list = []
         self.card_frames: list = []
         self.card_items: list = []
@@ -830,6 +840,24 @@ class OptiManagerApp:
             return
         return coordinator.on_fsr4_archive_state_changed(state)
 
+    def _on_optipatcher_archive_state_changed(self, state: ArchivePreparationState) -> None:
+        coordinator = getattr(self, "_startup_runtime_coordinator", None)
+        if coordinator is None:
+            return
+        return coordinator.on_optipatcher_archive_state_changed(state)
+
+    def _on_ual_archive_state_changed(self, state: ArchivePreparationState) -> None:
+        coordinator = getattr(self, "_startup_runtime_coordinator", None)
+        if coordinator is None:
+            return
+        return coordinator.on_ual_archive_state_changed(state)
+
+    def _on_unreal5_archive_state_changed(self, state: ArchivePreparationState) -> None:
+        coordinator = getattr(self, "_startup_runtime_coordinator", None)
+        if coordinator is None:
+            return
+        return coordinator.on_unreal5_archive_state_changed(state)
+
     def _create_card_viewport_controller(self) -> None:
         runtime, controller = create_card_viewport_bundle(self, UI_CONTROLLER_FACTORY_CONFIG)
         self._card_viewport_runtime = runtime
@@ -1121,7 +1149,7 @@ class OptiManagerApp:
             return
         return controller.apply_selected_install()
 
-    def _apply_optiscaler_worker(self, game_data, source_archive, resolved_dll_name, fsr4_source_archive, fsr4_required):
+    def _apply_optiscaler_worker(self, game_data, source_archive, resolved_dll_name, fsr4_source_archive, fsr4_required, ual_cached_archive="", optipatcher_cached_archive="", unreal5_cached_archive=""):
         controller = self._get_install_flow_controller()
         if controller is None:
             return
@@ -1131,6 +1159,9 @@ class OptiManagerApp:
             resolved_dll_name,
             fsr4_source_archive,
             fsr4_required,
+            ual_cached_archive=ual_cached_archive,
+            optipatcher_cached_archive=optipatcher_cached_archive,
+            unreal5_cached_archive=unreal5_cached_archive,
         )
 
     def _on_install_finished(self, success, message, installed_game=None):

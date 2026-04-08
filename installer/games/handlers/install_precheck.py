@@ -15,6 +15,7 @@ _MONITORED_DLL_NAMES = (
     "d3d10.dll",
     "d3d9.dll",
     "dinput8.dll",
+    "reshade64.dll",
     "specialk64.dll",
     "specialk32.dll",
     "version.dll",

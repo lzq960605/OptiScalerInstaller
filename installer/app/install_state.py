@@ -125,6 +125,10 @@ def build_install_entry_state(
     fsr4_source_archive: str,
     fsr4_archive_error: str,
     game_popup_confirmed: bool,
+    predownload_in_progress: bool = False,
+    ual_cached_archive: str = "",
+    optipatcher_cached_archive: str = "",
+    unreal5_cached_archive: str = "",
 ) -> InstallEntryState:
     return InstallEntryState(
         multi_gpu_blocked=bool(multi_gpu_blocked),
@@ -144,6 +148,10 @@ def build_install_entry_state(
         fsr4_source_archive=str(fsr4_source_archive or ""),
         fsr4_archive_error=str(fsr4_archive_error or ""),
         game_popup_confirmed=bool(game_popup_confirmed),
+        predownload_in_progress=bool(predownload_in_progress),
+        ual_cached_archive=str(ual_cached_archive or ""),
+        optipatcher_cached_archive=str(optipatcher_cached_archive or ""),
+        unreal5_cached_archive=str(unreal5_cached_archive or ""),
     )
 
 
