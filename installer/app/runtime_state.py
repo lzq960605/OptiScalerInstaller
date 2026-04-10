@@ -16,6 +16,26 @@ class ArchiveRuntimeState:
     fsr4_error: str = ""
     fsr4_filename: str = ""
     fsr4_source_archive: str = ""
+    optipatcher_ready: bool = False
+    optipatcher_downloading: bool = False
+    optipatcher_error: str = ""
+    optipatcher_filename: str = ""
+    optipatcher_source_archive: str = ""
+    specialk_ready: bool = False
+    specialk_downloading: bool = False
+    specialk_error: str = ""
+    specialk_filename: str = ""
+    specialk_source_archive: str = ""
+    ual_ready: bool = False
+    ual_downloading: bool = False
+    ual_error: str = ""
+    ual_filename: str = ""
+    ual_source_archive: str = ""
+    unreal5_ready: bool = False
+    unreal5_downloading: bool = False
+    unreal5_error: str = ""
+    unreal5_filename: str = ""
+    unreal5_source_archive: str = ""
 
 
 @dataclass
@@ -48,6 +68,11 @@ class InstallRuntimeState:
     precheck_ok: bool = False
     precheck_error: str = ""
     precheck_dll_name: str = ""
+    precheck_ual_detected_names: tuple[str, ...] = ()
+    precheck_reshade_install_mode: str = "disabled"
+    precheck_reshade_source_dll_name: str = ""
+    precheck_specialk_install_mode: str = "disabled"
+    precheck_specialk_source_dll_name: str = ""
 
 
 @dataclass
@@ -83,6 +108,26 @@ _RUNTIME_STATE_FIELD_MAP = {
     "fsr4_archive_downloading": ("_archive_state", "fsr4_downloading", ArchiveRuntimeState),
     "fsr4_archive_error": ("_archive_state", "fsr4_error", ArchiveRuntimeState),
     "fsr4_archive_filename": ("_archive_state", "fsr4_filename", ArchiveRuntimeState),
+    "optipatcher_source_archive": ("_archive_state", "optipatcher_source_archive", ArchiveRuntimeState),
+    "optipatcher_archive_ready": ("_archive_state", "optipatcher_ready", ArchiveRuntimeState),
+    "optipatcher_archive_downloading": ("_archive_state", "optipatcher_downloading", ArchiveRuntimeState),
+    "optipatcher_archive_error": ("_archive_state", "optipatcher_error", ArchiveRuntimeState),
+    "optipatcher_archive_filename": ("_archive_state", "optipatcher_filename", ArchiveRuntimeState),
+    "specialk_source_archive": ("_archive_state", "specialk_source_archive", ArchiveRuntimeState),
+    "specialk_archive_ready": ("_archive_state", "specialk_ready", ArchiveRuntimeState),
+    "specialk_archive_downloading": ("_archive_state", "specialk_downloading", ArchiveRuntimeState),
+    "specialk_archive_error": ("_archive_state", "specialk_error", ArchiveRuntimeState),
+    "specialk_archive_filename": ("_archive_state", "specialk_filename", ArchiveRuntimeState),
+    "ual_source_archive": ("_archive_state", "ual_source_archive", ArchiveRuntimeState),
+    "ual_archive_ready": ("_archive_state", "ual_ready", ArchiveRuntimeState),
+    "ual_archive_downloading": ("_archive_state", "ual_downloading", ArchiveRuntimeState),
+    "ual_archive_error": ("_archive_state", "ual_error", ArchiveRuntimeState),
+    "ual_archive_filename": ("_archive_state", "ual_filename", ArchiveRuntimeState),
+    "unreal5_source_archive": ("_archive_state", "unreal5_source_archive", ArchiveRuntimeState),
+    "unreal5_archive_ready": ("_archive_state", "unreal5_ready", ArchiveRuntimeState),
+    "unreal5_archive_downloading": ("_archive_state", "unreal5_downloading", ArchiveRuntimeState),
+    "unreal5_archive_error": ("_archive_state", "unreal5_error", ArchiveRuntimeState),
+    "unreal5_archive_filename": ("_archive_state", "unreal5_filename", ArchiveRuntimeState),
     "gpu_names": ("_gpu_state", "gpu_names", GpuRuntimeState),
     "gpu_count": ("_gpu_state", "gpu_count", GpuRuntimeState),
     "is_multi_gpu": ("_gpu_state", "is_multi_gpu", GpuRuntimeState),

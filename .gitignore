@@ -18,9 +18,18 @@ temp_version.txt
 logs/
 
 # Tests and local test artifacts
-tests/
+tests/*
 tests_runtime/
 .pytest_cache/
+.pytest_tmp/
+codex_test_tmp/
+codex_*/
+temp_clean/
+pytest_clean/
+temp_suite_*/
+pytest_suite_*/
+temp_probe_*/
+pytest_probe_*/
 pytest-cache-files-*/
 pytest.ini
 .coverage

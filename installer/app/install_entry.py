@@ -23,6 +23,11 @@ class InstallEntryState:
     fsr4_source_archive: str
     fsr4_archive_error: str
     game_popup_confirmed: bool
+    predownload_in_progress: bool = False
+    ual_cached_archive: str = ""
+    optipatcher_cached_archive: str = ""
+    specialk_cached_archive: str = ""
+    unreal5_cached_archive: str = ""
 
 
 @dataclass(frozen=True)
@@ -35,6 +40,10 @@ class InstallEntryDecision:
     resolved_dll_name: str = ""
     fsr4_required: bool = False
     fsr4_source_archive: str = ""
+    ual_cached_archive: str = ""
+    optipatcher_cached_archive: str = ""
+    specialk_cached_archive: str = ""
+    unreal5_cached_archive: str = ""
 
 
 def validate_install_entry(
@@ -46,6 +55,9 @@ def validate_install_entry(
 
     if state.install_in_progress:
         return InstallEntryDecision(ok=False, code="install_in_progress")
+
+    if state.predownload_in_progress:
+        return InstallEntryDecision(ok=False, code="predownload_in_progress")
 
     if state.selected_game_index is None:
         return InstallEntryDecision(ok=False, code="no_game_selected")
@@ -96,6 +108,10 @@ def validate_install_entry(
         resolved_dll_name=str(state.install_precheck_dll_name or ""),
         fsr4_required=fsr4_required,
         fsr4_source_archive=str(state.fsr4_source_archive or "") if fsr4_required else "",
+        ual_cached_archive=str(state.ual_cached_archive or ""),
+        optipatcher_cached_archive=str(state.optipatcher_cached_archive or ""),
+        specialk_cached_archive=str(state.specialk_cached_archive or ""),
+        unreal5_cached_archive=str(state.unreal5_cached_archive or ""),
     )
 
 

@@ -12,6 +12,7 @@ def install_unreal5_patch(
     module_download_links: Mapping[str, object],
     gpu_info,
     logger=None,
+    cached_archive_path: str = "",
 ) -> bool:
     unreal_link_entry = module_download_links.get("unreal5")
     unreal_url = ""
@@ -19,13 +20,15 @@ def install_unreal5_patch(
         unreal_url = str(unreal_link_entry["url"]).strip()
 
     unreal5_rule = str(game_data.get("unreal5_rule", "") or "").strip()
-    if not unreal_url or not gpu_service.matches_gpu_rule(unreal5_rule, gpu_info):
+    if not (unreal_url or cached_archive_path) or not gpu_service.matches_gpu_rule(unreal5_rule, gpu_info):
         return False
 
-    unreal_installed = bool(installer_services.install_unreal5_from_url(unreal_url, target_path, logger=logger))
+    unreal_installed = bool(installer_services.install_unreal5_from_url(
+        unreal_url, target_path, logger=logger, cached_archive_path=cached_archive_path
+    ))
     if logger:
         if unreal_installed:
-            logger.info("Installed Unreal5 patch from %s to %s", unreal_url, target_path)
+            logger.info("Installed Unreal5 patch from %s to %s", cached_archive_path or unreal_url, target_path)
         else:
             logger.info("Skipped Unreal5 patch because dxgi.dll is already present in %s", target_path)
     return unreal_installed
