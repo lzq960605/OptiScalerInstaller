@@ -88,13 +88,6 @@ class GpuStrings:
 
 
 @dataclass(frozen=True)
-class RtssStrings:
-    notice_title: str
-    no_message: str
-    fallback_message: str
-
-
-@dataclass(frozen=True)
 class UpdateStrings:
     available_title: str
     available_body_template: str
@@ -121,7 +114,6 @@ class AppStrings:
     main: MainUiStrings
     dialogs: DialogStrings
     gpu: GpuStrings
-    rtss: RtssStrings
     update: UpdateStrings
     precheck: PrecheckStrings
 
@@ -201,17 +193,6 @@ _STRINGS_BY_LANG: dict[Lang, AppStrings] = {
                 "다른 GPU로 실행 시 정상적으로 동작하지 않을 수 있습니다."
             ),
             vendor_unknown="알 수 없음",
-        ),
-        rtss=RtssStrings(
-            notice_title="RTSS 안내",
-            no_message="표시할 안내 메시지가 없습니다.",
-            fallback_message=(
-                "RTSS 설정을 확인해주세요.\n\n"
-                "[Global]\n"
-                "UseDetours=1\n"
-                "ReflexSetLatencyMarker=0\n\n"
-                "위 설정이 적용되어 있는지 확인해 주세요."
-            ),
         ),
         update=UpdateStrings(
             available_title="업데이트 확인",
@@ -308,16 +289,6 @@ _STRINGS_BY_LANG: dict[Lang, AppStrings] = {
                 "It may not work correctly if the game is run on the other GPU."
             ),
             vendor_unknown="Unknown",
-        ),
-        rtss=RtssStrings(
-            notice_title="RTSS Notice",
-            no_message="(No message)",
-            fallback_message=(
-                "RTSS Configuration Check:\n\n"
-                "Please ensure the following settings in your Global profile:\n"
-                "UseDetours=1\n"
-                "ReflexSetLatencyMarker=0"
-            ),
         ),
         update=UpdateStrings(
             available_title="Update Available",

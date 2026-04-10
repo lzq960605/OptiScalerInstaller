@@ -408,16 +408,6 @@ def load_module_download_links_from_public_sheet(spreadsheet_id, gid=518993268):
                 mapping[f"__{module_key}__"] = warning_text
             continue
 
-        if module_key in {"rtss_kr", "rtss_en"}:
-            rtss_text = ""
-            if version_idx is not None and len(row) > version_idx:
-                rtss_text = str(row[version_idx]).strip()
-            elif len(row) > module_idx + 1:
-                rtss_text = str(row[module_idx + 1]).strip()
-            if rtss_text:
-                mapping[module_key] = rtss_text
-            continue
-
         if module_key == "exclude_list":
             exclude_text = ""
             if version_idx is not None and len(row) > version_idx:

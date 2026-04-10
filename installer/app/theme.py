@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from . import gpu_notice, message_popup, rtss_notice
+from . import gpu_notice, message_popup
 from .ui_builder import MainUiTheme
 
 
@@ -31,7 +31,6 @@ class AppThemeBundle:
     card_title_overlay_background: str
     card_title_overlay_text: str
     main_ui_theme: MainUiTheme
-    rtss_notice_theme: rtss_notice.RtssNoticeTheme
     gpu_notice_theme: gpu_notice.GpuNoticeTheme
     message_popup_theme: message_popup.MessagePopupTheme
 
@@ -80,12 +79,6 @@ def build_app_theme(
     font_heading = str(strings.main.heading_font_family)
     font_ui = str(strings.main.ui_font_family)
 
-    rtss_notice_theme = rtss_notice.RtssNoticeTheme(
-        surface_color=surface,
-        accent_color=accent,
-        accent_hover_color=accent_hover,
-        font_ui=font_ui,
-    )
     gpu_notice_theme = gpu_notice.GpuNoticeTheme(
         surface_color=surface,
         accent_color=accent,
@@ -146,7 +139,6 @@ def build_app_theme(
         card_title_overlay_background=card_title_overlay_background,
         card_title_overlay_text=card_title_overlay_text,
         main_ui_theme=main_ui_theme,
-        rtss_notice_theme=rtss_notice_theme,
         gpu_notice_theme=gpu_notice_theme,
         message_popup_theme=message_popup_theme,
     )

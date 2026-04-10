@@ -303,9 +303,6 @@ DEFAULT_POSTER_CANDIDATES = [
     ASSETS_DIR / "default_poster.jpg",
     ASSETS_DIR / "default_poster.png",
 ]
-BUNDLED_COVER_FILENAME_MAP = {
-    "rtss.webp": "RTSS.webp",
-}
 IMAGE_TIMEOUT_SECONDS = 10
 IMAGE_MAX_RETRIES = 3
 IMAGE_MAX_WORKERS = 4
@@ -354,7 +351,6 @@ UI_CONTROLLER_FACTORY_CONFIG = UiControllerFactoryConfig(
     title_height=34,
 )
 APP_CONTROLLER_FACTORY_CONFIG = AppControllerFactoryConfig(
-    assets_dir=ASSETS_DIR,
     create_prefixed_logger=get_prefixed_logger,
     default_sheet_gid=SHEET_GID,
     download_links_gid=DOWNLOAD_LINKS_SHEET_GID,
@@ -365,10 +361,8 @@ APP_CONTROLLER_FACTORY_CONFIG = AppControllerFactoryConfig(
     optipatcher_url=OPTIPATCHER_URL,
     root_width_fallback=WINDOW_W,
     root_height_fallback=WINDOW_H,
-    rtss_theme=APP_THEME.rtss_notice_theme,
     sheet_id=SHEET_ID,
     supported_games_wiki_url=SUPPORTED_GAMES_WIKI_URL,
-    use_korean=USE_KOREAN,
 )
 
 class OptiManagerApp:
@@ -461,7 +455,6 @@ class OptiManagerApp:
                 target_width=self._poster_target_width,
                 target_height=self._poster_target_height,
                 repo_raw_base_url=COVERS_REPO_RAW_BASE_URL,
-                bundled_cover_filename_map=BUNDLED_COVER_FILENAME_MAP,
                 timeout_seconds=IMAGE_TIMEOUT_SECONDS,
                 max_retries=IMAGE_MAX_RETRIES,
                 cache_version=POSTER_CACHE_VERSION,
@@ -487,7 +480,6 @@ class OptiManagerApp:
             callbacks=StartupFlowCallbacks(
                 start_archive_prepare=self._start_optiscaler_archive_prepare,
                 start_auto_scan=self._start_auto_scan,
-                show_rtss_notice=self._show_rtss_notice,
                 show_startup_warning_popup=self._show_startup_warning_popup,
             ),
             is_multi_gpu_blocked=self._is_multi_gpu_block_active,
@@ -780,17 +772,6 @@ class OptiManagerApp:
         return controller.check_app_update(
             self.sheet_state.module_download_links,
             blocked=bool(self.gpu_state.multi_gpu_blocked),
-        )
-
-    def _show_rtss_notice(self) -> None:
-        controller = getattr(self, "_app_actions_controller", None)
-        if controller is None:
-            return
-        controller.show_rtss_notice(
-            tuple(self.found_exe_list),
-            self.card_ui_state.selected_game_index,
-            getattr(self, "lang", "en"),
-            self.sheet_state.module_download_links,
         )
 
     def _show_startup_warning_popup(

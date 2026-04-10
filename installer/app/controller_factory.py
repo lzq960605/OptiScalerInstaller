@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import logging
-from pathlib import Path
 from tkinter import filedialog, messagebox
 from typing import Any
 
@@ -29,7 +28,6 @@ from .scan_feedback import ScanFeedbackCallbacks, ScanFeedbackController
 
 @dataclass(frozen=True)
 class AppControllerFactoryConfig:
-    assets_dir: Path
     create_prefixed_logger: Callable[[str], Any]
     default_sheet_gid: int
     download_links_gid: int
@@ -40,10 +38,8 @@ class AppControllerFactoryConfig:
     root_height_fallback: int
     root_width_fallback: int
     optipatcher_url: str
-    rtss_theme: Any
     sheet_id: str
     supported_games_wiki_url: str
-    use_korean: bool
 
 
 @dataclass(frozen=True)
@@ -128,7 +124,6 @@ def _build_app_notice_controller(app: Any, config: AppControllerFactoryConfig) -
 
 def _build_app_actions_controller(app: Any, config: AppControllerFactoryConfig) -> AppActionsController:
     return AppActionsController(
-        root=app.root,
         callbacks=AppActionCallbacks(
             show_close_while_installing_warning=lambda: messagebox.showwarning(
                 app.txt.common.warning,
@@ -139,11 +134,7 @@ def _build_app_actions_controller(app: Any, config: AppControllerFactoryConfig) 
                 module_download_links,
                 blocked=blocked,
             ),
-            create_prefixed_logger=config.create_prefixed_logger,
         ),
-        use_korean=config.use_korean,
-        assets_dir=config.assets_dir,
-        rtss_theme=config.rtss_theme,
     )
 
 
