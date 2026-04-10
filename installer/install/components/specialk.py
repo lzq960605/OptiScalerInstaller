@@ -11,7 +11,6 @@ def install_specialk(
     module_download_links: Mapping[str, object],
     logger=None,
     cached_archive_path: str = "",
-    existing_prepared: bool = False,
 ) -> None:
     link_entry = module_download_links.get("specialk")
     url = ""
@@ -24,7 +23,6 @@ def install_specialk(
         url=url,
         logger=logger,
         cached_archive_path=cached_archive_path,
-        existing_prepared=existing_prepared,
     )
     if logger and installed:
         source = cached_archive_path or url

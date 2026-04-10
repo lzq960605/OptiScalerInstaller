@@ -42,8 +42,6 @@ OPTISCALER_LEGACY_REMOVE_NAMES = {
     "nvngx.dll",
 }
 OPTISCALER_PROXY_FALLBACK_NAMES = ("winmm.dll", "version.dll")
-RESHADE_COMPAT_INSTALL_ENABLED = False
-SPECIALK_AUTO_DETECT_INSTALL_ENABLED = False
 OPTIPATCHER_PLUGIN_NAME = "OptiPatcher.asi"
 OPTIPATCHER_ARCHIVE_EXTENSIONS = {".zip", ".7z"}
 SPECIALK64_DLL_NAME = "SpecialK64.dll"
@@ -206,16 +204,10 @@ def target_has_filename(target_path, file_name: str) -> bool:
         return False
 
 
-def resolve_proxy_dll_name(target_path, preferred_name="", logger=None, reusable_filenames=None) -> str:
+def resolve_proxy_dll_name(target_path, preferred_name="", logger=None) -> str:
     target_dir = Path(target_path)
     if not target_dir.is_dir():
         raise ValueError(f"Invalid target folder: {target_path}")
-
-    reusable_name_set = {
-        Path(str(name).strip()).name.lower()
-        for name in (reusable_filenames or ())
-        if str(name).strip()
-    }
 
     candidates = []
     for name in [preferred_name, *OPTISCALER_PROXY_FALLBACK_NAMES]:
@@ -234,13 +226,6 @@ def resolve_proxy_dll_name(target_path, preferred_name="", logger=None, reusable
             if logger:
                 logger.info("OptiScaler DLL name: %s", candidate)
             return candidate
-        if candidate_path.name.lower() in reusable_name_set:
-            if logger:
-                logger.info(
-                    "OptiScaler DLL name reserved for planned ReShade migration: %s",
-                    candidate,
-                )
-            return candidate
         if _is_optiscaler_managed_proxy_dll(candidate_path):
             if logger:
                 logger.info(
@@ -255,106 +240,6 @@ def resolve_proxy_dll_name(target_path, preferred_name="", logger=None, reusable
         "No available OptiScaler DLL names for installation. "
         f"Checked: {', '.join(candidates)}"
     )
-
-
-def prepare_reshade_for_optiscaler(target_path, install_mode="", source_dll_name="", logger=None) -> bool:
-    target_dir = Path(target_path)
-    if not target_dir.is_dir():
-        raise ValueError(f"Invalid target folder: {target_path}")
-
-    normalized_mode = str(install_mode or "").strip().lower()
-    compat_path = target_dir / "ReShade64.dll"
-
-    if normalized_mode in {"", "disabled"}:
-        return False
-    if not RESHADE_COMPAT_INSTALL_ENABLED:
-        if logger:
-            logger.info("ReShade compatibility install is disabled; leaving existing ReShade files untouched.")
-        return False
-
-    if normalized_mode == "already_migrated":
-        if not compat_path.is_file():
-            raise RuntimeError(f"Expected migrated ReShade DLL was not found: {compat_path.name}")
-        if logger:
-            logger.info("ReShade compatibility DLL already present: %s", compat_path.name)
-        return True
-
-    if normalized_mode == "invalid_multiple":
-        raise RuntimeError("Multiple ReShade DLLs were detected; installation cannot continue.")
-
-    if normalized_mode != "migrate":
-        raise RuntimeError(f"Unsupported ReShade install mode: {install_mode}")
-
-    normalized_source_name = Path(str(source_dll_name or "").strip()).name
-    if not normalized_source_name:
-        raise RuntimeError("ReShade migration requires a source DLL name.")
-
-    source_path = target_dir / normalized_source_name
-    if not source_path.is_file():
-        raise RuntimeError(f"Expected ReShade DLL was not found: {normalized_source_name}")
-
-    if source_path.name.lower() == compat_path.name.lower():
-        if logger:
-            logger.info("ReShade compatibility DLL already prepared: %s", compat_path.name)
-        return True
-
-    if compat_path.exists():
-        raise RuntimeError(f"Cannot migrate ReShade because {compat_path.name} already exists.")
-
-    _ensure_writable(source_path)
-    source_path.replace(compat_path)
-    if logger:
-        logger.info("Migrated ReShade DLL: %s -> %s", normalized_source_name, compat_path.name)
-    return True
-
-
-def prepare_specialk_for_optiscaler(
-    target_path,
-    final_dll_name="",
-    install_mode="",
-    source_dll_name="",
-    logger=None,
-) -> bool:
-    target_dir = Path(target_path)
-    if not target_dir.is_dir():
-        raise ValueError(f"Invalid target folder: {target_path}")
-
-    normalized_mode = str(install_mode or "").strip().lower()
-    if normalized_mode in {"", "disabled"}:
-        return False
-    if not SPECIALK_AUTO_DETECT_INSTALL_ENABLED:
-        if logger:
-            logger.info("Special K auto-detected migration is disabled; leaving existing Special K files untouched.")
-        return False
-
-    if normalized_mode != "migrate":
-        raise RuntimeError(f"Unsupported Special K install mode: {install_mode}")
-
-    normalized_source_name = Path(str(source_dll_name or "").strip()).name
-    normalized_final_name = Path(str(final_dll_name or "").strip()).name
-    if not normalized_source_name:
-        raise RuntimeError("Special K migration requires a source DLL name.")
-    if not normalized_final_name:
-        raise RuntimeError("Special K migration requires the final OptiScaler DLL name.")
-
-    source_path = target_dir / normalized_source_name
-    if not source_path.is_file():
-        raise RuntimeError(f"Expected Special K DLL was not found: {normalized_source_name}")
-
-    plugins_dir = target_dir / "plugins"
-    plugins_dir.mkdir(parents=True, exist_ok=True)
-    destination_path = plugins_dir / normalized_final_name
-
-    _ensure_writable(source_path)
-    if destination_path.exists():
-        if not destination_path.is_file():
-            raise RuntimeError(f"Existing Special K plugin destination is not a file: {destination_path}")
-        _ensure_writable(destination_path)
-
-    source_path.replace(destination_path)
-    if logger:
-        logger.info("Moved existing Special K DLL: %s -> %s", normalized_source_name, destination_path)
-    return True
 
 
 def backup_existing_optiscaler_dlls(target_path, logger=None):
@@ -765,7 +650,7 @@ def install_optipatcher(target_path, url, logger=None, cached_archive_path=""):
         logger.info("OptiPatcher installed to %s", destination_path)
 
 
-def install_specialk(target_path, final_dll_name, url="", logger=None, cached_archive_path="", existing_prepared=False):
+def install_specialk(target_path, final_dll_name, url="", logger=None, cached_archive_path=""):
     target_dir = Path(str(target_path or "").strip())
     if not target_dir.is_dir():
         raise ValueError(f"Invalid target folder: {target_path}")
@@ -783,13 +668,6 @@ def install_specialk(target_path, final_dll_name, url="", logger=None, cached_ar
     normalized_url = str(url or "").strip()
 
     if not use_cache and not normalized_url:
-        if existing_prepared and destination_path.is_file():
-            if logger:
-                logger.info(
-                    "Special K cached install skipped: no download link or cache; keeping migrated file at %s",
-                    destination_path,
-                )
-            return False
         raise FileNotFoundError("Special K download link is not configured")
 
     tmpdir_path = target_dir / f".optiscaler_specialk_tmp_{uuid.uuid4().hex}"

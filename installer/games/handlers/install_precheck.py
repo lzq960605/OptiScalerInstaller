@@ -31,25 +31,6 @@ _OWNER_KEYWORDS = {
     "special_k": ("special k", "specialk"),
     "ultimate_asi_loader": ("ultimate asi loader",),
 }
-RESHADE_COMPAT_DLL_NAME = "ReShade64.dll"
-RESHADE_INSTALL_MODE_DISABLED = "disabled"
-RESHADE_INSTALL_MODE_MIGRATE = "migrate"
-RESHADE_INSTALL_MODE_ALREADY_MIGRATED = "already_migrated"
-RESHADE_INSTALL_MODE_INVALID_MULTIPLE = "invalid_multiple"
-SPECIALK_INSTALL_MODE_DISABLED = "disabled"
-SPECIALK_INSTALL_MODE_MIGRATE = "migrate"
-_SPECIALK_SOURCE_PRIORITY = (
-    "dxgi.dll",
-    "d3d12.dll",
-    "d3d11.dll",
-    "d3d10.dll",
-    "d3d9.dll",
-    "version.dll",
-    "winmm.dll",
-    "dinput8.dll",
-    "specialk64.dll",
-    "specialk32.dll",
-)
 
 
 @dataclass(frozen=True)
@@ -87,20 +68,6 @@ class ModPrecheckState:
 class ModConflictFinding:
     kind: str
     evidence: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class ReShadeInstallState:
-    mode: str = RESHADE_INSTALL_MODE_DISABLED
-    source_dll_name: str = ""
-    detected_dll_names: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class SpecialKInstallState:
-    mode: str = SPECIALK_INSTALL_MODE_DISABLED
-    source_dll_name: str = ""
-    detected_dll_names: tuple[str, ...] = ()
 
 
 def _empty_mod_binary_state() -> ModBinaryState:
@@ -269,72 +236,6 @@ def scan_target_mod_conflicts(target_path: str, logger=None) -> tuple[ModConflic
     return build_mod_conflict_findings(state)
 
 
-def resolve_reshade_install_state(state: ModPrecheckState) -> ReShadeInstallState:
-    if not installer_services.RESHADE_COMPAT_INSTALL_ENABLED:
-        return ReShadeInstallState()
-
-    detected_names = tuple(str(name).strip() for name in state.reshade.dll_names if str(name).strip())
-    if not detected_names:
-        return ReShadeInstallState()
-
-    normalized_names = {name.lower() for name in detected_names}
-    compat_name = RESHADE_COMPAT_DLL_NAME.lower()
-    if len(normalized_names) == 1 and compat_name in normalized_names:
-        return ReShadeInstallState(
-            mode=RESHADE_INSTALL_MODE_ALREADY_MIGRATED,
-            detected_dll_names=detected_names,
-        )
-
-    if len(normalized_names) > 1 or compat_name in normalized_names:
-        return ReShadeInstallState(
-            mode=RESHADE_INSTALL_MODE_INVALID_MULTIPLE,
-            detected_dll_names=detected_names,
-        )
-
-    return ReShadeInstallState(
-        mode=RESHADE_INSTALL_MODE_MIGRATE,
-        source_dll_name=detected_names[0],
-        detected_dll_names=detected_names,
-    )
-
-
-def resolve_specialk_install_state(state: ModPrecheckState) -> SpecialKInstallState:
-    if not installer_services.SPECIALK_AUTO_DETECT_INSTALL_ENABLED:
-        return SpecialKInstallState()
-
-    detected_names = tuple(str(name).strip() for name in state.special_k.dll_names if str(name).strip())
-    if not detected_names:
-        return SpecialKInstallState()
-
-    normalized_by_name = {name.lower(): name for name in detected_names}
-    for preferred_name in _SPECIALK_SOURCE_PRIORITY:
-        if preferred_name in normalized_by_name:
-            return SpecialKInstallState(
-                mode=SPECIALK_INSTALL_MODE_MIGRATE,
-                source_dll_name=normalized_by_name[preferred_name],
-                detected_dll_names=detected_names,
-            )
-
-    return SpecialKInstallState(
-        mode=SPECIALK_INSTALL_MODE_MIGRATE,
-        source_dll_name=sorted(detected_names, key=str.lower)[0],
-        detected_dll_names=detected_names,
-    )
-
-
-def build_reshade_install_error(detected_dll_names: Iterable[str], use_korean: bool) -> str:
-    detected = ", ".join(_normalize_unique_strings(detected_dll_names))
-    if lang_from_bool(use_korean) == "ko":
-        return (
-            "ReShade DLL이 여러 개 감지되어 설치를 진행할 수 없습니다. "
-            f"하나의 ReShade만 남기고 다시 시도해 주세요: {detected}"
-        )
-    return (
-        "Installation cannot continue because multiple ReShade DLLs were detected. "
-        f"Leave only one ReShade hook DLL and try again: {detected}"
-    )
-
-
 def _format_finding(finding: ModConflictFinding, use_korean: bool) -> str:
     detected = ", ".join(finding.evidence)
     return build_mod_conflict_finding_text(finding.kind, detected, lang_from_bool(use_korean))
@@ -358,22 +259,10 @@ __all__ = [
     "ModBinaryState",
     "ModConflictFinding",
     "ModPrecheckState",
-    "RESHADE_COMPAT_DLL_NAME",
-    "RESHADE_INSTALL_MODE_ALREADY_MIGRATED",
-    "RESHADE_INSTALL_MODE_DISABLED",
-    "RESHADE_INSTALL_MODE_INVALID_MULTIPLE",
-    "RESHADE_INSTALL_MODE_MIGRATE",
-    "SPECIALK_INSTALL_MODE_DISABLED",
-    "SPECIALK_INSTALL_MODE_MIGRATE",
-    "ReShadeInstallState",
     "RenoDxState",
-    "SpecialKInstallState",
     "build_mod_conflict_findings",
     "build_mod_conflict_notice",
-    "build_reshade_install_error",
     "empty_mod_precheck_state",
-    "resolve_reshade_install_state",
-    "resolve_specialk_install_state",
     "scan_mod_precheck_state",
     "scan_target_mod_conflicts",
 ]
