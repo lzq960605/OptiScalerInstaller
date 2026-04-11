@@ -98,6 +98,11 @@ def create_card_viewport_bundle(
             has_found_games=lambda: bool(app.found_exe_list),
             render_cards=lambda keep_selection: app._render_cards(keep_selection=keep_selection),
             get_effective_widget_scale=app._get_effective_widget_scale,
+            set_card_image_updates_suspended=lambda suspended: getattr(
+                getattr(app, "_card_ui_controller", None),
+                "set_card_image_updates_suspended",
+                lambda _value: None,
+            )(suspended),
         ),
         card_width=config.card_width,
         card_h_spacing=config.card_h_spacing,

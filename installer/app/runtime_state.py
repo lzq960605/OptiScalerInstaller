@@ -75,6 +75,8 @@ class InstallRuntimeState:
 class CardUiRuntimeState:
     selected_game_index: int | None = None
     hovered_card_index: int | None = None
+    image_updates_suspended: bool = False
+    deferred_image_update_indices: set[int] = field(default_factory=set)
 
 
 @dataclass(frozen=True)

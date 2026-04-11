@@ -108,6 +108,11 @@ class GameCardUiController:
         for index in range(len(self._card_items)):
             self.refresh_card_visual(index)
 
+    def set_card_image_updates_suspended(self, suspended: bool) -> None:
+        self._card_ui_state.image_updates_suspended = bool(suspended)
+        if not suspended:
+            self._flush_deferred_image_updates()
+
     def set_card_base_image(self, index: int, label: Any, pil_img: Any) -> None:
         if index < 0 or index >= len(self._card_items):
             return
@@ -118,6 +123,9 @@ class GameCardUiController:
             label=label,
             pil_img=pil_img,
         ):
+            return
+        if self._card_ui_state.image_updates_suspended:
+            self._card_ui_state.deferred_image_update_indices.add(int(index))
             return
         self.refresh_card_visual(index)
 
@@ -138,6 +146,7 @@ class GameCardUiController:
         if controller is None:
             return
 
+        self._card_ui_state.deferred_image_update_indices.clear()
         controller.render_cards(
             tuple(self._callbacks.get_found_games() or ()),
             cols=max(1, int(self._callbacks.get_dynamic_column_count() or 1)),
@@ -224,6 +233,12 @@ class GameCardUiController:
         if not callable(queue_method):
             return
         queue_method(index, label, title, filename_cover, cover_url)
+
+    def _flush_deferred_image_updates(self) -> None:
+        pending_indices = sorted(self._card_ui_state.deferred_image_update_indices)
+        self._card_ui_state.deferred_image_update_indices.clear()
+        for index in pending_indices:
+            self.refresh_card_visual(index)
 
 
 __all__ = [

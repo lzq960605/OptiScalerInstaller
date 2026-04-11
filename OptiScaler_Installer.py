@@ -539,6 +539,10 @@ class OptiManagerApp:
                 canvas.bind("<Configure>", c.on_games_area_resize, add="+")
             if canvas is not None and scrollbar is not None:
                 scrollbar.configure(command=c.on_games_scrollbar_command)
+                scrollbar.bind("<Button-1>", c.on_games_scrollbar_press, add="+")
+                scrollbar.bind("<B1-Motion>", c.on_games_scrollbar_press, add="+")
+                scrollbar.bind("<ButtonRelease-1>", c.on_games_scrollbar_release, add="+")
+            self.root.bind("<ButtonRelease-1>", c.on_games_scrollbar_release, add="+")
         except Exception:
             logging.exception("Failed to bind viewport scroll events to controller")
 

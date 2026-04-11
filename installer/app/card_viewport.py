@@ -21,6 +21,7 @@ class CardViewportRuntime:
     games_scrollregion_after_id: str | None = None
     games_viewport_after_id: str | None = None
     overflow_fit_after_id: str | None = None
+    scrollbar_drag_in_progress: bool = False
 
 
 @dataclass(frozen=True)
@@ -29,6 +30,7 @@ class CardViewportCallbacks:
     has_found_games: Callable[[], bool]
     render_cards: Callable[[bool], None]
     get_effective_widget_scale: Callable[[], float]
+    set_card_image_updates_suspended: Callable[[bool], None]
 
 
 class CardViewportController:
@@ -70,8 +72,7 @@ class CardViewportController:
     def on_games_area_resize(self, _event=None) -> None:
         self._schedule_reflow_for_resize()
         self._schedule_overflow_fit_check()
-        if not self._runtime.resize_in_progress:
-            self._poster_queue.pump()
+        self._schedule_games_viewport_update()
 
     def on_games_scrollbar_command(self, *args) -> None:
         canvas = getattr(self._games_scroll, "_parent_canvas", None)
@@ -101,6 +102,19 @@ class CardViewportController:
                 canvas.yview_scroll(step, "units")
 
         self._schedule_games_viewport_update()
+
+    def on_games_scrollbar_press(self, _event=None) -> None:
+        if self._runtime.scrollbar_drag_in_progress:
+            return
+        self._runtime.scrollbar_drag_in_progress = True
+        self._callbacks.set_card_image_updates_suspended(True)
+
+    def on_games_scrollbar_release(self, _event=None) -> None:
+        if not self._runtime.scrollbar_drag_in_progress:
+            return
+        self._runtime.scrollbar_drag_in_progress = False
+        self._callbacks.set_card_image_updates_suspended(False)
+        self._schedule_games_viewport_update(delay_ms=0)
 
     def fit_cards_to_visible_width(self, preferred_cols: int | None = None) -> None:
         card_frames = tuple(self._callbacks.get_card_frames() or ())
