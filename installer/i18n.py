@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Literal, Mapping
 
 
-Lang = Literal["ko", "en"]
+Lang = Literal["ko", "en", "zh"]
 UI_LANGUAGE_ENV = "FORCE_UI_LANGUAGE"
 _NO_AVAILABLE_DLL_PREFIX = "No available OptiScaler DLL names for installation. "
 _CHECKED_PREFIX = "Checked: "
@@ -311,6 +311,102 @@ _STRINGS_BY_LANG: dict[Lang, AppStrings] = {
             rdr2_blocked_mod_popup_template="[RED][DOT]RDR2 installation cannot continue when certain incompatible MODs are detected.[BR][DOT]Remove the items below and try again.[BR][DOT]The following incompatible MODs were detected:[END][BR]{mods}",
         ),
     ),
+    "zh": AppStrings(
+        lang="zh",
+        common=CommonStrings(
+            ok="确定",
+            notice="通知",
+            warning="警告",
+            error="错误",
+        ),
+        main=MainUiStrings(
+            heading_font_family="Microsoft YaHei",
+            ui_font_family="Microsoft YaHei",
+            window_title_template="OptiScaler 安装器 v{version}",
+            app_title="OptiScaler 安装器",
+            gpu_label_template="GPU: {gpu}",
+            checking_gpu="正在检查 GPU...",
+            unknown_gpu="未知",
+            status_game_db="游戏数据库",
+            status_gpu_config="GPU 配置",
+            status_gpu_select="GPU 选择",
+            scan_section_title="1. 扫描游戏文件夹",
+            browse_button="浏览...",
+            supported_games_link="查看支持的游戏",
+            install_section_title="2. 安装信息",
+            install_button="安装",
+            installing_button="安装中...",
+            select_game_hint="选择游戏以查看信息。",
+            no_information="无可用信息。",
+            version_line_template="OptiScaler 版本: {value}",
+            waiting_for_gpu_selection="等待 GPU 选择",
+            scanning="扫描中...",
+            scan_result_title="扫描结果",
+            auto_scan_no_results="自动扫描未找到支持的游戏。\n请手动选择您的游戏安装文件夹。",
+            manual_scan_no_results="在所选文件夹中未找到支持的游戏。",
+        ),
+        dialogs=DialogStrings(
+            installer_notice_title="通知",
+            wiki_not_configured_detail="支持的游戏维基 URL 未配置。",
+            wiki_open_failed_detail="无法打开支持的游戏维基。",
+            close_while_installing_body="安装正在进行中。请等待。",
+            installation_completed="安装完成。",
+            installation_completed_with_name_template=(
+                "[RED]OptiScaler 已安装。\n"
+                "要移除它，请删除或重命名 OptiScaler 文件 ({name})。[END]"
+            ),
+            game_db_loading_title="游戏数据库加载中",
+            game_db_loading_body="游戏数据库仍在加载中。请稍候。",
+            game_db_error_title="游戏数据库错误",
+            game_db_error_body="无法连接到游戏数据库。\n请检查网络或重新启动安装器。",
+            installing_title="安装中",
+            installing_body="安装已在进行中。请等待。",
+            select_game_card_body="请选择要安装的游戏卡片。",
+            preparing_archive_title="准备归档",
+            preparing_archive_body="OptiScaler 归档下载仍在进行中。请等待。",
+            precheck_incomplete_body="OptiScaler DLL 兼容性检查尚未完成。",
+            precheck_retry_mods_body="查看上面的消息，然后在重试前移除或调整任何冲突的文件或设置。",
+            optiscaler_archive_not_ready="OptiScaler 归档尚未准备就绪。",
+            invalid_game_body="请选择有效的游戏项目。",
+            preparing_download_title="准备下载",
+            preparing_download_body="FSR4 下载仍在进行中。请等待。",
+            fsr4_not_ready="FSR4 尚未准备就绪。",
+            confirm_popup_body="请在安装前确认弹出窗口。",
+            install_failed_body_template="安装过程中发生错误: {message}",
+        ),
+        gpu=GpuStrings(
+            unsupported_title="不支持的 GPU 配置",
+            unsupported_message="检测到 3 个或更多 GPU。\n此安装不受支持。",
+            dual_selection_title="GPU 选择",
+            dual_selection_message=(
+                "检测到双 GPU。\n"
+                "请选择 OptiScaler 应为哪个 GPU 安装。\n"
+                "安装将使用所选 GPU 的设置。\n"
+                "如果游戏在其他 GPU 上运行，可能无法正常工作。"
+            ),
+            vendor_unknown="未知",
+        ),
+        update=UpdateStrings(
+            available_title="有可用更新",
+            available_body_template="有新版本 (v{version}) 可用。\n您现在要更新吗？",
+        ),
+        precheck=PrecheckStrings(
+            no_available_dll="没有可用于安装的 OptiScaler DLL 名称。",
+            checked_names_template="已检查: {names}",
+            mod_notice_header=(
+                "[RED]检测到其他 MOD。\n"
+                "某些检测到的 MOD 可能会自动处理，\n"
+                "但某些 MOD 可能会阻止游戏启动或导致意外行为。[END]"
+            ),
+            mod_notice_footer="查看检测到的 MOD 后，按主窗口中的安装按钮继续。",
+            reshade_detected_template="ReShade: {detected}\n\n为了与 ReShade ({detected}) 兼容，OptiScaler 将以不同的名称安装。",
+            special_k_detected_template="Special K: {detected}",
+            ultimate_asi_loader_detected_template="Ultimate ASI Loader: {detected}",
+            renodx_detected_template="RenoDX: {detected}",
+            mod_detected_template="MOD: {detected}",
+            rdr2_blocked_mod_popup_template="[RED][DOT]当检测到某些不兼容的 MOD 时，RDR2 安装无法继续。[BR][DOT]移除以下项目并重试。[BR][DOT]检测到以下不兼容的 MOD:[END][BR]{mods}",
+        ),
+    ),
 }
 
 
@@ -334,6 +430,8 @@ def _get_forced_ui_language() -> Lang | None:
         return "ko"
     if raw in {"en", "english"}:
         return "en"
+    if raw in {"zh", "cn", "chinese"}:
+        return "zh"
 
     logging.warning("[APP] Invalid %s=%r, using automatic UI language detection", UI_LANGUAGE_ENV, raw)
     return None
@@ -349,6 +447,8 @@ def detect_ui_language() -> Lang:
         lang_id = ctypes.windll.kernel32.GetUserDefaultUILanguage()
         if (lang_id & 0xFF) == 0x12:
             return "ko"
+        if (lang_id & 0xFF) == 0x04:
+            return "zh"
     except Exception:
         pass
 
@@ -356,6 +456,8 @@ def detect_ui_language() -> Lang:
         lang = locale.getlocale()[0] or ""
         if lang.lower().startswith("ko"):
             return "ko"
+        if lang.lower().startswith("zh"):
+            return "zh"
     except Exception:
         pass
 
@@ -363,7 +465,11 @@ def detect_ui_language() -> Lang:
 
 
 def _sheet_lang_suffix(lang: Lang) -> str:
-    return "kr" if lang == "ko" else "en"
+    if lang == "ko":
+        return "kr"
+    if lang == "zh":
+        return "zh"
+    return "en"
 
 
 def pick_sheet_text(source: Mapping[str, object], base_key: str, lang: Lang) -> str:
