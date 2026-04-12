@@ -16,6 +16,8 @@
 >
 > **If you are already comfortable with manual OptiScaler setup or regularly use mods, this installer is not recommended.**
 
+## [한국어 사용 가이드 링크](https://github.com/onehoon/OptiScalerInstaller/wiki/%ED%95%9C%EA%B5%AD%EC%96%B4-%EC%84%B8%EB%B6%80-%EA%B8%B0%EB%8A%A5-%EB%B0%8F-%EC%82%AC%EC%9A%A9-%EA%B0%80%EC%9D%B4%EB%93%9C)
+
 &nbsp;
 
 ## 📋 Requirements
@@ -47,7 +49,7 @@
 - NVIDIA RTX 20/30 Series GPUs do not support native DLSS Frame Generation. This installer enables frame generation through OptiScaler using Intel XeFG instead.
 - On AMD GPUs, this installer uses Intel XeFG through OptiScaler instead of FSR3 Frame Generation.
 
-**Supported Game List** (https://github.com/onehoon/OptiScalerInstaller/wiki/Supported-Game-List)
+## [Supported Game List](https://github.com/onehoon/OptiScalerInstaller/wiki/Supported-Game-List)
 
 &nbsp;
 ## ✨ Key Features
