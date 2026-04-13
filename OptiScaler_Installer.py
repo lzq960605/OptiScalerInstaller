@@ -138,7 +138,7 @@ def _get_runtime_config_value(name: str, default: str = "") -> str:
 
 
 # Application Version
-APP_VERSION = "0.3.8"
+APP_VERSION = "0.3.9"
 # Install flow supports up to two detected GPUs. Dual-GPU requires explicit user selection.
 MAX_SUPPORTED_GPU_COUNT = 2
 
@@ -162,17 +162,33 @@ def _get_int_env(name: str, default: int = 0) -> int:
 # Allow overriding these values via build-time config for frozen builds
 # and via environment variables/.env during source development.
 SHEET_ID = _get_runtime_config_value("OPTISCALER_SHEET_ID", "")
-SHEET_GID = _get_int_env("OPTISCALER_SHEET_GID", 0)
+CONFIGURED_SHEET_GID = _get_int_env("OPTISCALER_SHEET_GID", 0)
 DOWNLOAD_LINKS_SHEET_GID = _get_int_env("OPTISCALER_DOWNLOAD_LINKS_SHEET_GID", 0)
 SUPPORTED_GAMES_WIKI_URL = _get_runtime_config_value("SUPPORTED_GAMES_WIKI_URL", "").strip()
 GPU_VENDOR_DB_GIDS = {
-    "intel": _get_int_env("DB_INTEL_GID", SHEET_GID),
-    "amd": _get_int_env("DB_AMD_GID", SHEET_GID),
-    "nvidia": _get_int_env("DB_NVIDIA_GID", SHEET_GID),
+    "intel": _get_int_env("DB_INTEL_GID", CONFIGURED_SHEET_GID),
+    "amd": _get_int_env("DB_AMD_GID", CONFIGURED_SHEET_GID),
+    "nvidia": _get_int_env("DB_NVIDIA_GID", CONFIGURED_SHEET_GID),
 }
+
+
+def _resolve_default_sheet_gid(configured_gid: int, vendor_db_gids: dict[str, int]) -> int:
+    if int(configured_gid or 0):
+        return int(configured_gid)
+
+    for vendor in ("intel", "amd", "nvidia"):
+        gid = int(vendor_db_gids.get(vendor, 0) or 0)
+        if gid:
+            return gid
+    return 0
+
+
+SHEET_GID = _resolve_default_sheet_gid(CONFIGURED_SHEET_GID, GPU_VENDOR_DB_GIDS)
 
 if not SHEET_ID:
     logging.warning("[APP] OPTISCALER_SHEET_ID not found in build config, environment variables, or .env file.")
+if not CONFIGURED_SHEET_GID and SHEET_GID:
+    logging.info("[APP] OPTISCALER_SHEET_GID not set; using vendor DB gid %s as default.", SHEET_GID)
 
 OPTIPATCHER_URL = _get_runtime_config_value(
     "OPTIPATCHER_URL",
