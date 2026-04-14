@@ -5,7 +5,7 @@
 <p align="center">
   <b>Automatically installs and configures OptiScaler per game and GPU.</b><br>
   <b>No manual setup — optimized settings applied instantly.</b><br>
-  <sub>Unlike conventional installers, this tool eliminates the hassle and guesswork of manual OptiScaler setup.</sub>
+  <b>Unlike conventional installers, this tool eliminates the hassle and guesswork of manual OptiScaler setup.</b>
 </p>
 
 > [!NOTE]
